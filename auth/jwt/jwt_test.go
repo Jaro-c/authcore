@@ -277,6 +277,36 @@ func TestCreateTokens_refreshHashMatchesHashRefreshToken(t *testing.T) {
 	}
 }
 
+func TestCreateTokens_sessionIDIsUUIDv7(t *testing.T) {
+	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+
+	if pair.SessionID == "" {
+		t.Fatal("SessionID is empty")
+	}
+	// UUID v7: version digit at position 14 must be '7',
+	// variant nibble at position 19 must be 8, 9, a, or b.
+	id := pair.SessionID
+	if len(id) != 36 {
+		t.Fatalf("SessionID length = %d, want 36", len(id))
+	}
+	if id[14] != '7' {
+		t.Errorf("SessionID version digit = %q, want '7'", id[14])
+	}
+	if id[19] != '8' && id[19] != '9' && id[19] != 'a' && id[19] != 'b' {
+		t.Errorf("SessionID variant nibble = %q, want 8/9/a/b", id[19])
+	}
+}
+
+func TestCreateTokens_consecutiveSessionIDsAreUnique(t *testing.T) {
+	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	p1, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	p2, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	if p1.SessionID == p2.SessionID {
+		t.Error("consecutive CreateTokens calls must not produce equal SessionIDs")
+	}
+}
+
 // ---- VerifyAccessToken() ----------------------------------------------------
 
 func TestVerifyAccessToken_validTokenReturnsCorrectClaims(t *testing.T) {

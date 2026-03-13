@@ -134,7 +134,7 @@ func (j *JWT) CreateTokens(subject string) (*TokenPair, error) {
 	}
 
 	// ----- Refresh token (carries a jti for rotation tracking) -----
-	jti, err := generateJTI()
+	jti, err := generateJTI(now)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +151,7 @@ func (j *JWT) CreateTokens(subject string) (*TokenPair, error) {
 		RefreshToken:          refreshToken,
 		RefreshTokenExpiresAt: now.Add(j.cfg.RefreshTokenTTL),
 		RefreshTokenHash:      computeHMAC(refreshToken, j.secret),
+		SessionID:             jti,
 	}, nil
 }
 

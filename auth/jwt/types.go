@@ -31,6 +31,12 @@ type TokenPair struct {
 	// compute its hash and look it up in your database before calling
 	// RotateTokens.
 	RefreshTokenHash string
+
+	// SessionID is the UUID v7 that uniquely identifies this session.
+	// It is the "jti" claim embedded in the RefreshToken.
+	// Use it as the primary key for your session store to associate
+	// metadata such as device, IP address, or last-seen time.
+	SessionID string
 }
 
 // Claims represents the verified payload extracted from an access token.

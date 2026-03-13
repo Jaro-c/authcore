@@ -135,12 +135,31 @@ func computeHMAC(token string, secret []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// generateJTI returns a cryptographically random 16-byte (128-bit) hex string
-// suitable for use as the "jti" claim in refresh tokens.
-func generateJTI() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+// generateJTI returns a UUID v7 string suitable for use as the "jti" claim
+// in refresh tokens. The 48-bit timestamp comes from now; the remaining bits
+// are cryptographically random.
+//
+// Format: xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx (RFC 9562 §5.7)
+func generateJTI(now time.Time) (string, error) {
+	ms := now.UnixMilli()
+
+	var b [16]byte
+	// Bytes 0-5: 48-bit Unix timestamp in milliseconds.
+	b[0] = byte(ms >> 40)
+	b[1] = byte(ms >> 32)
+	b[2] = byte(ms >> 24)
+	b[3] = byte(ms >> 16)
+	b[4] = byte(ms >> 8)
+	b[5] = byte(ms)
+
+	// Bytes 6-15: random.
+	if _, err := rand.Read(b[6:]); err != nil {
 		return "", fmt.Errorf("generate token ID: %w", err)
 	}
-	return hex.EncodeToString(b), nil
+
+	b[6] = (b[6] & 0x0f) | 0x70 // version 7
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx (RFC 4122)
+
+	h := hex.EncodeToString(b[:])
+	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32]), nil
 }
