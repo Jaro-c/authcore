@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/Jaro-c/authcore"
@@ -12,50 +13,80 @@ import (
 
 func main() {
 	// -------------------------------------------------------------------------
-	// Example 1: use defaults (logs enabled, UTC timezone).
-	// This is the recommended starting point for most applications.
+	// Example 1: defaults (logs enabled, UTC timezone, keys in ".authcore").
+	// In a real application you would omit the KeysDir override and let
+	// authcore manage the directory automatically in your project root.
 	// -------------------------------------------------------------------------
-	auth, err := authcore.New(authcore.DefaultConfig())
+	dir1, cleanup1 := tempDir()
+	defer cleanup1()
+
+	auth, err := authcore.New(authcore.Config{
+		EnableLogs: true,
+		Timezone:   time.UTC,
+		KeysDir:    dir1,
+	})
 	if err != nil {
 		log.Fatalf("failed to initialise authcore: %v", err)
 	}
 
-	fmt.Printf("timezone : %s\n", auth.Config().Timezone)
-	fmt.Printf("logs on  : %v\n", auth.Config().EnableLogs)
+	fmt.Printf("timezone      : %s\n", auth.Config().Timezone)
+	fmt.Printf("logs enabled  : %v\n", auth.Config().EnableLogs)
+	fmt.Printf("keys dir      : %s\n", auth.Config().KeysDir)
+	fmt.Printf("public key    : %x…\n\n", auth.Keys().PublicKey()[:8])
 
 	// -------------------------------------------------------------------------
-	// Example 2: custom timezone, logs disabled (useful in tests or CLIs).
+	// Example 2: custom timezone, logs disabled, explicit keys directory.
+	// Useful for tests or environments where the working directory is read-only.
 	// -------------------------------------------------------------------------
 	bogota, err := time.LoadLocation("America/Bogota")
 	if err != nil {
 		log.Fatalf("unknown timezone: %v", err)
 	}
 
-	cfg := authcore.DefaultConfig()
-	cfg.Timezone = bogota
-	cfg.EnableLogs = false
+	dir2, cleanup2 := tempDir()
+	defer cleanup2()
 
-	silentAuth, err := authcore.New(cfg)
+	silentAuth, err := authcore.New(authcore.Config{
+		EnableLogs: false,
+		Timezone:   bogota,
+		KeysDir:    dir2,
+	})
 	if err != nil {
 		log.Fatalf("failed to initialise authcore: %v", err)
 	}
 
-	fmt.Printf("timezone : %s\n", silentAuth.Config().Timezone)
-	fmt.Printf("logs on  : %v\n", silentAuth.Config().EnableLogs)
+	fmt.Printf("timezone      : %s\n", silentAuth.Config().Timezone)
+	fmt.Printf("logs enabled  : %v\n", silentAuth.Config().EnableLogs)
 
 	// -------------------------------------------------------------------------
 	// Example 3: inject a custom logger (e.g. wrap slog, zap, zerolog).
 	// -------------------------------------------------------------------------
-	cfg2 := authcore.DefaultConfig()
-	cfg2.Logger = &myAppLogger{}
+	dir3, cleanup3 := tempDir()
+	defer cleanup3()
 
-	customAuth, err := authcore.New(cfg2)
+	cfg := authcore.DefaultConfig()
+	cfg.Logger = &myAppLogger{}
+	cfg.KeysDir = dir3
+
+	customAuth, err := authcore.New(cfg)
 	if err != nil {
 		log.Fatalf("failed to initialise authcore: %v", err)
 	}
 
-	// Logger() exposes the active logger so sub-modules can share the same sink.
+	// Logger() and Keys() are exposed through the Provider interface so
+	// sub-modules can share the same sink and key material.
 	_ = customAuth.Logger()
+	_ = customAuth.Keys().RefreshSecret()
+}
+
+// tempDir creates a temporary directory and returns a cleanup function.
+// In production, authcore manages ".authcore" in your project root automatically.
+func tempDir() (string, func()) {
+	dir, err := os.MkdirTemp("", "authcore-example-*")
+	if err != nil {
+		log.Fatalf("create temp dir: %v", err)
+	}
+	return dir, func() { os.RemoveAll(dir) }
 }
 
 // myAppLogger is a toy implementation of authcore.Logger.
