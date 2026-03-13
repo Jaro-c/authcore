@@ -18,20 +18,22 @@ type Config struct {
 	RefreshTokenTTL time.Duration
 
 	// Issuer is the value of the "iss" claim in every token.
-	// Defaults to "authcore".
+	// Defaults to "github.com/Jaro-c/authcore".
+	// Override this with your own service URL or identifier (e.g. "https://auth.example.com").
 	Issuer string
 }
 
 // DefaultConfig returns a Config with safe, production-ready defaults.
 //
 //	cfg := jwt.DefaultConfig()
-//	cfg.AccessTokenTTL = 5 * time.Minute   // tighten for high-security APIs
+//	cfg.AccessTokenTTL = 5 * time.Minute          // tighten for high-security APIs
+//	cfg.Issuer = "https://auth.example.com"        // override with your service URL
 //	jwtMod, err := jwt.New(auth, cfg)
 func DefaultConfig() Config {
 	return Config{
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
-		Issuer:          "authcore",
+		Issuer:          "github.com/Jaro-c/authcore",
 	}
 }
 

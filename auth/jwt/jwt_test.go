@@ -116,7 +116,7 @@ func TestNew_implementsModule(t *testing.T) {
 
 func TestCreateTokens_returnsNonEmptyPair(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, err := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, err := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 	if err != nil {
 		t.Fatalf("CreateTokens() error = %v", err)
 	}
@@ -144,11 +144,12 @@ func TestCreateTokens_invalidSubjectReturnsError(t *testing.T) {
 		"",
 		"not-a-uuid",
 		"123",
-		"550e8400-e29b-41d4-a716",               // too short
-		"550e8400-e29b-41d4-a716-4466554400001", // too long
-		"550e8400-e29b-11d4-a716-446655440000",  // v1 — rejected
-		"550e8400-e29b-31d4-a716-446655440000",  // v3 — rejected
-		"550e8400-e29b-61d4-a716-446655440000",  // v6 — rejected
+		"0191b432-b5a7-7c4f-b2e6",               // too short
+		"0191b432-b5a7-7c4f-b2e6-7a3f1d2e00001", // too long
+		"550e8400-e29b-11d4-a716-446655440000",   // v1 — rejected
+		"550e8400-e29b-31d4-a716-446655440000",   // v3 — rejected
+		"550e8400-e29b-41d4-a716-446655440000",   // v4 — rejected
+		"550e8400-e29b-61d4-a716-446655440000",   // v6 — rejected
 	}
 	for _, tc := range cases {
 		_, err := j.CreateTokens(tc)
@@ -161,10 +162,10 @@ func TestCreateTokens_invalidSubjectReturnsError(t *testing.T) {
 func TestCreateTokens_uppercaseUUIDIsNormalised(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
 
-	upper := "550E8400-E29B-41D4-A716-446655440000"
+	upper := "0191B432-B5A7-7C4F-B2E6-7A3F1D2E0000"
 	pair, err := j.CreateTokens(upper)
 	if err != nil {
-		t.Fatalf("uppercase UUID v4 should be accepted, got %v", err)
+		t.Fatalf("uppercase UUID v7 should be accepted, got %v", err)
 	}
 
 	claims, _ := j.VerifyAccessToken(pair.AccessToken)
@@ -177,8 +178,6 @@ func TestCreateTokens_validUUIDVersionsAreAccepted(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
 
 	cases := []string{
-		"550e8400-e29b-41d4-a716-446655440000", // v4 lowercase
-		"550E8400-E29B-41D4-A716-446655440000", // v4 uppercase
 		"0191b432-b5a7-7c4f-b2e6-7a3f1d2e4c5a", // v7 lowercase
 		"0191B432-B5A7-7C4F-B2E6-7A3F1D2E4C5A", // v7 uppercase
 	}
@@ -191,14 +190,14 @@ func TestCreateTokens_validUUIDVersionsAreAccepted(t *testing.T) {
 
 func TestCreateTokens_subjectPreservedInAccessToken(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440042")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0042")
 
 	claims, err := j.VerifyAccessToken(pair.AccessToken)
 	if err != nil {
 		t.Fatalf("VerifyAccessToken() error = %v", err)
 	}
-	if claims.Subject != "550e8400-e29b-41d4-a716-446655440042" {
-		t.Errorf("Subject = %q, want %q", claims.Subject, "550e8400-e29b-41d4-a716-446655440042")
+	if claims.Subject != "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0042" {
+		t.Errorf("Subject = %q, want %q", claims.Subject, "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0042")
 	}
 }
 
@@ -206,7 +205,7 @@ func TestCreateTokens_issuerPreservedInClaims(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Issuer = "my-service"
 	j := newTestJWT(t, newFakeProvider(t), cfg)
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	claims, _ := j.VerifyAccessToken(pair.AccessToken)
 	if claims.Issuer != "my-service" {
@@ -216,7 +215,7 @@ func TestCreateTokens_issuerPreservedInClaims(t *testing.T) {
 
 func TestCreateTokens_accessAndRefreshTokensAreDifferent(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 	if pair.AccessToken == pair.RefreshToken {
 		t.Error("AccessToken and RefreshToken must not be equal")
 	}
@@ -224,8 +223,8 @@ func TestCreateTokens_accessAndRefreshTokensAreDifferent(t *testing.T) {
 
 func TestCreateTokens_consecutiveCallsProduceUniqueRefreshTokens(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	p1, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
-	p2, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	p1, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	p2, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 	if p1.RefreshToken == p2.RefreshToken {
 		t.Error("consecutive CreateTokens calls must not produce equal refresh tokens")
 	}
@@ -239,7 +238,7 @@ func TestCreateTokens_accessTokenExpiryIsCorrect(t *testing.T) {
 	cfg.AccessTokenTTL = 5 * time.Minute
 	j := newTestJWT(t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 	claims, _ := j.VerifyAccessToken(pair.AccessToken)
 
 	want := epoch.Add(5 * time.Minute)
@@ -254,7 +253,7 @@ func TestCreateTokens_expiryFieldsMatchConfig(t *testing.T) {
 	cfg.RefreshTokenTTL = 12 * time.Hour
 	j := newTestJWT(t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	wantAccess := epoch.Add(5 * time.Minute)
 	if !pair.AccessTokenExpiresAt.Equal(wantAccess) {
@@ -269,7 +268,7 @@ func TestCreateTokens_expiryFieldsMatchConfig(t *testing.T) {
 
 func TestCreateTokens_refreshHashMatchesHashRefreshToken(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	got := j.HashRefreshToken(pair.RefreshToken)
 	if got != pair.RefreshTokenHash {
@@ -279,7 +278,7 @@ func TestCreateTokens_refreshHashMatchesHashRefreshToken(t *testing.T) {
 
 func TestCreateTokens_sessionIDIsUUIDv7(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	if pair.SessionID == "" {
 		t.Fatal("SessionID is empty")
@@ -300,8 +299,8 @@ func TestCreateTokens_sessionIDIsUUIDv7(t *testing.T) {
 
 func TestCreateTokens_consecutiveSessionIDsAreUnique(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	p1, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
-	p2, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	p1, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	p2, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 	if p1.SessionID == p2.SessionID {
 		t.Error("consecutive CreateTokens calls must not produce equal SessionIDs")
 	}
@@ -311,14 +310,14 @@ func TestCreateTokens_consecutiveSessionIDsAreUnique(t *testing.T) {
 
 func TestVerifyAccessToken_validTokenReturnsCorrectClaims(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440099")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0099")
 
 	claims, err := j.VerifyAccessToken(pair.AccessToken)
 	if err != nil {
 		t.Fatalf("VerifyAccessToken() error = %v", err)
 	}
-	if claims.Subject != "550e8400-e29b-41d4-a716-446655440099" {
-		t.Errorf("Subject = %q, want %q", claims.Subject, "550e8400-e29b-41d4-a716-446655440099")
+	if claims.Subject != "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0099" {
+		t.Errorf("Subject = %q, want %q", claims.Subject, "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0099")
 	}
 	if !claims.IssuedAt.Equal(epoch) {
 		t.Errorf("IssuedAt = %v, want %v", claims.IssuedAt, epoch)
@@ -330,7 +329,7 @@ func TestVerifyAccessToken_expiredTokenReturnsErrTokenExpired(t *testing.T) {
 	cfg.AccessTokenTTL = 10 * time.Minute
 	j := newTestJWT(t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	// Advance clock past expiry.
 	j.clock = clock.Fixed(epoch.Add(11 * time.Minute))
@@ -346,7 +345,7 @@ func TestVerifyAccessToken_tokenAtExactExpiryIsExpired(t *testing.T) {
 	cfg.AccessTokenTTL = 10 * time.Minute
 	j := newTestJWT(t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 	// golang-jwt/v5 uses strict now.After(exp), so the token is still valid at
 	// the exact expiry second. Advance one second past exp to trigger expiry.
 	j.clock = clock.Fixed(epoch.Add(10*time.Minute + time.Second))
@@ -359,7 +358,7 @@ func TestVerifyAccessToken_tokenAtExactExpiryIsExpired(t *testing.T) {
 
 func TestVerifyAccessToken_tamperedSignatureReturnsErrTokenInvalid(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	// Modify a middle character of the signature segment to guarantee the
 	// decoded bytes change. The last base64url char of an Ed25519 signature
@@ -394,7 +393,7 @@ func TestVerifyAccessToken_malformedTokenReturnsErrTokenMalformed(t *testing.T) 
 
 func TestVerifyAccessToken_rejectsRefreshToken(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	_, err := j.VerifyAccessToken(pair.RefreshToken)
 	if !errors.Is(err, ErrWrongTokenType) {
@@ -409,7 +408,7 @@ func TestVerifyAccessToken_rejectsTokenFromDifferentKey(t *testing.T) {
 	j1 := newTestJWT(t, p1, DefaultConfig())
 	j2 := newTestJWT(t, p2, DefaultConfig())
 
-	pair, _ := j1.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j1.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	_, err := j2.VerifyAccessToken(pair.AccessToken)
 	if !errors.Is(err, ErrTokenInvalid) {
@@ -421,7 +420,7 @@ func TestVerifyAccessToken_rejectsTokenFromDifferentKey(t *testing.T) {
 
 func TestHashRefreshToken_isDeterministic(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	h1 := j.HashRefreshToken(pair.RefreshToken)
 	h2 := j.HashRefreshToken(pair.RefreshToken)
@@ -432,8 +431,8 @@ func TestHashRefreshToken_isDeterministic(t *testing.T) {
 
 func TestHashRefreshToken_differentTokensDifferentHashes(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	p1, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
-	p2, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	p1, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	p2, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	if j.HashRefreshToken(p1.RefreshToken) == j.HashRefreshToken(p2.RefreshToken) {
 		t.Error("different refresh tokens must produce different HMAC digests")
@@ -445,7 +444,7 @@ func TestHashRefreshToken_differentSecretsDifferentHashes(t *testing.T) {
 	j2 := newTestJWT(t, newFakeProvider(t), DefaultConfig())
 
 	// Sign a token with j1's key, hash it with both modules' secrets.
-	pair, _ := j1.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j1.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	h1 := j1.HashRefreshToken(pair.RefreshToken)
 	h2 := j2.HashRefreshToken(pair.RefreshToken)
@@ -460,7 +459,7 @@ func TestHashRefreshToken_differentSecretsDifferentHashes(t *testing.T) {
 
 func TestRotateTokens_returnsNewPairForSameSubject(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	old, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440007")
+	old, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0007")
 
 	newPair, err := j.RotateTokens(old.RefreshToken)
 	if err != nil {
@@ -468,14 +467,14 @@ func TestRotateTokens_returnsNewPairForSameSubject(t *testing.T) {
 	}
 
 	claims, _ := j.VerifyAccessToken(newPair.AccessToken)
-	if claims.Subject != "550e8400-e29b-41d4-a716-446655440007" {
-		t.Errorf("Subject after rotation = %q, want %q", claims.Subject, "550e8400-e29b-41d4-a716-446655440007")
+	if claims.Subject != "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0007" {
+		t.Errorf("Subject after rotation = %q, want %q", claims.Subject, "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0007")
 	}
 }
 
 func TestRotateTokens_newTokensDifferFromOld(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	old, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	old, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	// Advance clock by 1 second so the issued-at differs.
 	j.clock = clock.Fixed(epoch.Add(time.Second))
@@ -497,7 +496,7 @@ func TestRotateTokens_expiredRefreshTokenReturnsErrTokenExpired(t *testing.T) {
 	cfg.RefreshTokenTTL = 24 * time.Hour
 	j := newTestJWT(t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	// Advance past refresh token TTL.
 	j.clock = clock.Fixed(epoch.Add(25 * time.Hour))
@@ -510,7 +509,7 @@ func TestRotateTokens_expiredRefreshTokenReturnsErrTokenExpired(t *testing.T) {
 
 func TestRotateTokens_rejectsAccessToken(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	_, err := j.RotateTokens(pair.AccessToken)
 	if !errors.Is(err, ErrWrongTokenType) {
@@ -520,7 +519,7 @@ func TestRotateTokens_rejectsAccessToken(t *testing.T) {
 
 func TestRotateTokens_rejectsTamperedToken(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	rt := pair.RefreshToken
 	midRT := len(rt) - 10
@@ -538,7 +537,7 @@ func TestRotateTokens_rejectsTamperedToken(t *testing.T) {
 
 func TestRotateTokens_newHashMatchesHashRefreshToken(t *testing.T) {
 	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("550e8400-e29b-41d4-a716-446655440001")
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
 
 	j.clock = clock.Fixed(epoch.Add(time.Second))
 	newPair, _ := j.RotateTokens(pair.RefreshToken)

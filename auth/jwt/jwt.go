@@ -49,10 +49,10 @@ import (
 	"github.com/Jaro-c/authcore/internal/clock"
 )
 
-// uuidRe matches UUID v4 and v7 in canonical form (case-insensitive via ToLower).
-// Position 14 (version digit) must be 4 or 7.
+// uuidRe matches UUID v7 in canonical form (case-insensitive via ToLower).
+// Position 14 (version digit) must be 7 (RFC 9562 §5.7).
 // Position 19 (variant byte) must be 8, 9, a, or b (RFC 4122 variant).
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // Compile-time assertion: *JWT must satisfy authcore.Module.
 var _ authcore.Module = (*JWT)(nil)
@@ -105,10 +105,10 @@ func (j *JWT) Name() string { return "jwt" }
 
 // CreateTokens generates a new access and refresh token pair for subject.
 //
-// subject is the UUID that identifies the user in your system. It is stored
+// subject is the UUID v7 that identifies the user in your system. It is stored
 // in the "sub" JWT claim and returned in Claims.Subject after verification.
-// Any UUID version is accepted (v4, v7, etc.) and any casing — the value is
-// normalised to lowercase before signing.
+// Only UUID v7 is accepted (RFC 9562 §5.7); any casing is allowed — the value
+// is normalised to lowercase before signing.
 //
 // The returned TokenPair contains:
 //

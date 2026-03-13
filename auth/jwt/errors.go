@@ -24,6 +24,6 @@ var (
 	ErrWrongTokenType = errors.New("jwt: wrong token type")
 
 	// ErrInvalidSubject is returned when CreateTokens is called with a
-	// subject that is not a valid UUID (any version, case-insensitive).
-	ErrInvalidSubject = errors.New("jwt: subject must be a valid UUID")
+	// subject that is not a valid UUID v7 (RFC 9562 §5.7, case-insensitive).
+	ErrInvalidSubject = errors.New("jwt: subject must be a valid UUID v7")
 )
