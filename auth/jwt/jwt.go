@@ -36,7 +36,7 @@
 //	jwtMod, _ := jwt.New[UserClaims](auth, jwt.DefaultConfig())
 //
 //	// 2. Login — create a token pair for the authenticated user.
-//	pair, _ := jwtMod.CreateTokens(userID, UserClaims{Name: "Juan", Role: "admin"})
+//	pair, _ := jwtMod.CreateTokens(userID, UserClaims{Name: "Ana", Role: "admin"})
 //	sendToBrowser(pair.AccessToken, pair.RefreshToken)
 //	db.StoreRefreshHash(userID, pair.RefreshTokenHash)
 //
@@ -45,17 +45,19 @@
 //	if err != nil { ... } // errors.Is(err, jwt.ErrTokenExpired)
 //	fmt.Println(claims.Extra.Name)
 //
-//	// 4. Token rotation — when the client presents a refresh token.
-//	oldHash := jwtMod.HashRefreshToken(clientToken)
-//	if !db.Exists(oldHash) { return http.StatusUnauthorized }
+//	// 4. Token rotation — verify the hash first (timing-safe), then rotate.
+//	if !jwtMod.VerifyRefreshTokenHash(clientToken, storedHash) {
+//	    return http.StatusUnauthorized
+//	}
 //	user, _ := db.GetUser(userID)
 //	newPair, _ := jwtMod.RotateTokens(clientToken, UserClaims{Name: user.Name, Role: user.Role})
-//	db.ReplaceRefreshHash(oldHash, newPair.RefreshTokenHash)
+//	db.ReplaceRefreshHash(storedHash, newPair.RefreshTokenHash)
 //	sendToBrowser(newPair.AccessToken, newPair.RefreshToken)
 package jwt
 
 import (
 	"crypto/ed25519"
+	"crypto/subtle"
 	"fmt"
 	"regexp"
 	"strings"
@@ -201,7 +203,7 @@ func (j *JWT[T]) CreateTokens(subject string, extra T) (*TokenPair, error) {
 //	claims, err := jwtMod.VerifyAccessToken(token)
 //	if errors.Is(err, jwt.ErrTokenExpired) { ... }
 func (j *JWT[T]) VerifyAccessToken(token string) (*Claims[T], error) {
-	c, err := verifyAccessToken[T](token, j.pub, j.clock.Now(), j.cfg.Audience)
+	c, err := verifyAccessToken[T](token, j.pub, j.clock.Now(), j.cfg.Audience, j.cfg.ClockSkewLeeway)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +226,21 @@ func (j *JWT[T]) HashRefreshToken(token string) string {
 	return computeHMAC(token, j.secret)
 }
 
+// VerifyRefreshTokenHash reports whether token produces the same HMAC-SHA256
+// digest as storedHash using a constant-time comparison to prevent timing attacks.
+//
+// Call this instead of a plain string equality check when validating a client's
+// refresh token against the hash stored in your database:
+//
+//	if !jwtMod.VerifyRefreshTokenHash(clientToken, row.RefreshTokenHash) {
+//	    return http.StatusUnauthorized
+//	}
+//	newPair, err := jwtMod.RotateTokens(clientToken, freshClaims)
+func (j *JWT[T]) VerifyRefreshTokenHash(token, storedHash string) bool {
+	computed := computeHMAC(token, j.secret)
+	return subtle.ConstantTimeCompare([]byte(computed), []byte(storedHash)) == 1
+}
+
 // RotateTokens verifies refreshToken, then generates and returns a new
 // token pair for the same subject with fresh extra claims.
 //
@@ -242,7 +259,7 @@ func (j *JWT[T]) HashRefreshToken(token string) string {
 //
 // Returns the same errors as VerifyAccessToken.
 func (j *JWT[T]) RotateTokens(refreshToken string, extra T) (*TokenPair, error) {
-	c, err := verifyRefreshToken(refreshToken, j.pub, j.clock.Now(), j.cfg.Audience)
+	c, err := verifyRefreshToken(refreshToken, j.pub, j.clock.Now(), j.cfg.Audience, j.cfg.ClockSkewLeeway)
 	if err != nil {
 		return nil, err
 	}

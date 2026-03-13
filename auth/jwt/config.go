@@ -27,14 +27,21 @@ type Config struct {
 	// Defaults to ["github.com/Jaro-c/authcore"].
 	// Override this with your own service identifiers (e.g. ["https://api.example.com"]).
 	Audience []string
+
+	// ClockSkewLeeway is the tolerance applied when validating the "exp" and "iat" claims.
+	// It compensates for small clock differences between distributed servers.
+	// Defaults to 0 (no leeway). A value of 30 seconds is typical for production deployments.
+	// Must not be negative.
+	ClockSkewLeeway time.Duration
 }
 
 // DefaultConfig returns a Config with safe, production-ready defaults.
 //
 //	cfg := jwt.DefaultConfig()
-//	cfg.AccessTokenTTL = 5 * time.Minute                        // tighten for high-security APIs
-//	cfg.Issuer   = "https://auth.example.com"                   // override with your service URL
-//	cfg.Audience = []string{"https://api.example.com"}          // override with your API URL
+//	cfg.AccessTokenTTL   = 5 * time.Minute          // tighten for high-security APIs
+//	cfg.Issuer           = "https://auth.example.com"
+//	cfg.Audience         = []string{"https://api.example.com"}
+//	cfg.ClockSkewLeeway  = 30 * time.Second          // recommended for distributed deployments
 //	jwtMod, err := jwt.New[MyClaims](auth, cfg)
 func DefaultConfig() Config {
 	return Config{
@@ -76,6 +83,9 @@ func validateConfig(cfg Config) error {
 	}
 	if len(cfg.Audience) == 0 {
 		return fmt.Errorf("audience must contain at least one value")
+	}
+	if cfg.ClockSkewLeeway < 0 {
+		return fmt.Errorf("clock skew leeway must not be negative, got %s", cfg.ClockSkewLeeway)
 	}
 	return nil
 }

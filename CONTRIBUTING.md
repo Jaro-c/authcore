@@ -1,65 +1,69 @@
 # Contributing to authcore
 
-First off, thank you for considering contributing to `authcore`! It's people like you that make it a better tool for everyone.
-
-As a security-focused project, we have a few extra rules to ensure the library remains robust and safe for production use.
+Thank you for taking the time to contribute! Security-focused libraries need careful,
+thoughtful contributions — the guidelines below keep the bar high for everyone's benefit.
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Security First
 
-If you find a security vulnerability, **do not open a public issue**. Please follow the reporting process outlined in our [Security Policy](SECURITY.md).
+If you find a security vulnerability, **do not open a public issue**.
+Follow the process in our [Security Policy](SECURITY.md) instead.
 
-## How Can I Contribute?
+## Ways to Contribute
 
 ### Reporting Bugs
 
-- **Check if the bug has already been reported** by searching the [issues](https://github.com/Jaro-c/authcore/issues).
-- If you can't find an open issue addressing the problem, [open a new one](https://github.com/Jaro-c/authcore/issues/new/choose).
-- Use the **Bug Report** template.
-- Include as much detail as possible: steps to reproduce, Go version, OS, and any relevant logs.
+1. Search [existing issues](https://github.com/Jaro-c/authcore/issues) first.
+2. If none matches, [open a new issue](https://github.com/Jaro-c/authcore/issues/new/choose) using the **Bug Report** template.
+3. Include: Go version, OS, steps to reproduce, and any relevant logs.
 
 ### Suggesting Enhancements
 
-- **Check if the enhancement has already been suggested**.
-- [Open a new issue](https://github.com/Jaro-c/authcore/issues/new/choose) using the **Feature Request** template.
-- Explain why this enhancement would be useful to most users.
+1. Search [existing issues](https://github.com/Jaro-c/authcore/issues) to avoid duplicates.
+2. Open an issue using the **Feature Request** template.
+3. Explain the use case — why would most users benefit?
 
 ### Pull Requests
 
-1. **Fork the repository** and create your branch from `main`.
-2. **Install dependencies**: `go mod download`.
-3. **Write tests**: Every new feature or bug fix must include tests. We aim for high coverage, especially for security-critical paths.
-4. **Follow Go standards**:
-    - Run `go fmt ./...`.
-    - Run `go vet ./...`.
-    - Use meaningful variable names and document exported functions (following [GoDoc](https://go.dev/doc/effective_go#commentary) style).
-5. **Keep it small**: Smaller PRs are easier to review and more likely to be merged.
-6. **Update documentation**: If you change public APIs, update the `README.md` and any relevant examples.
-7. **Sign your commits**: We prefer signed commits for auditability.
+1. **Fork** the repository and branch from `main`.
+2. **Run `go mod download`** to fetch dependencies.
+3. **Write tests.** Every change must include tests. Security-critical paths need
+   table-driven tests that cover both the happy path and all error cases.
+4. **Follow Go standards:**
+   - `go fmt ./...`
+   - `go vet ./...`
+   - `golangci-lint run` (if installed)
+   - Export everything with [godoc-style comments](https://go.dev/doc/effective_go#commentary).
+5. **Keep PRs small.** Smaller, focused PRs are reviewed faster.
+6. **Update docs.** If a public API changes, update `README.md` and affected examples.
+7. **Sign commits** for auditability (preferred, not required).
 
 ## Development Setup
 
-Requires Go 1.22+.
+Requires **Go 1.26+**.
 
 ```bash
 # Clone your fork
 git clone https://github.com/YOUR_USERNAME/authcore.git
 cd authcore
 
-# Run tests
+# Fetch dependencies
+go mod download
+
+# Run all tests with the race detector
 go test -v -race ./...
 
-# Run linting (if you have golangci-lint installed)
+# Run linting (requires golangci-lint)
 golangci-lint run
 ```
 
 ## Pull Request Process
 
-1. Ensure the CI pipeline passes.
-2. A maintainer will review your PR within a few days.
-3. Once approved, it will be merged into `main`.
+1. Ensure all CI checks pass (tests + lint).
+2. A maintainer will review within a few days.
+3. Once approved it will be squash-merged into `main`.
 
 Thank you for your contribution!

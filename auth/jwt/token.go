@@ -94,7 +94,8 @@ func signToken(claims gjwt.Claims, key ed25519.PrivateKey, kid string) (string, 
 // verifyAccessToken validates the compact JWT string and returns the decoded access claims.
 // now is injected to allow deterministic testing via clock.Fixed.
 // audience is validated: the token must contain at least the first configured audience value.
-func verifyAccessToken[T any](tokenStr string, pub ed25519.PublicKey, now time.Time, audience []string) (*accessClaims[T], error) {
+// leeway is added to the expiration window to tolerate small clock skew between servers.
+func verifyAccessToken[T any](tokenStr string, pub ed25519.PublicKey, now time.Time, audience []string, leeway time.Duration) (*accessClaims[T], error) {
 	var c accessClaims[T]
 	_, err := gjwt.ParseWithClaims(
 		tokenStr, &c,
@@ -103,6 +104,7 @@ func verifyAccessToken[T any](tokenStr string, pub ed25519.PublicKey, now time.T
 		gjwt.WithExpirationRequired(),
 		gjwt.WithIssuedAt(),
 		gjwt.WithAudience(audience[0]),
+		gjwt.WithLeeway(leeway),
 	)
 	if err != nil {
 		return nil, mapJWTError(err)
@@ -112,7 +114,8 @@ func verifyAccessToken[T any](tokenStr string, pub ed25519.PublicKey, now time.T
 
 // verifyRefreshToken validates the compact JWT string and returns the decoded refresh claims.
 // audience is validated: the token must contain at least the first configured audience value.
-func verifyRefreshToken(tokenStr string, pub ed25519.PublicKey, now time.Time, audience []string) (*refreshClaims, error) {
+// leeway is added to the expiration window to tolerate small clock skew between servers.
+func verifyRefreshToken(tokenStr string, pub ed25519.PublicKey, now time.Time, audience []string, leeway time.Duration) (*refreshClaims, error) {
 	var c refreshClaims
 	_, err := gjwt.ParseWithClaims(
 		tokenStr, &c,
@@ -121,6 +124,7 @@ func verifyRefreshToken(tokenStr string, pub ed25519.PublicKey, now time.Time, a
 		gjwt.WithExpirationRequired(),
 		gjwt.WithIssuedAt(),
 		gjwt.WithAudience(audience[0]),
+		gjwt.WithLeeway(leeway),
 	)
 	if err != nil {
 		return nil, mapJWTError(err)
