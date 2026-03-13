@@ -11,11 +11,6 @@ type TokenPair struct {
 	// Default lifetime: 15 minutes.
 	AccessToken string
 
-	// AccessTokenID is the UUID v7 that uniquely identifies this access token.
-	// It is the "jti" claim embedded in the AccessToken.
-	// Use it for audit logging or access token revocation (blocklist by jti).
-	AccessTokenID string
-
 	// AccessTokenExpiresAt is when AccessToken expires.
 	// Send this to the client so it can schedule a token refresh proactively.
 	AccessTokenExpiresAt time.Time
@@ -37,17 +32,20 @@ type TokenPair struct {
 	// RotateTokens.
 	RefreshTokenHash string
 
-	// SessionID is the UUID v7 that uniquely identifies this session.
-	// It is the "jti" claim embedded in the RefreshToken.
-	// Use it as the primary key for your session store to associate
-	// metadata such as device, IP address, or last-seen time.
+	// SessionID is the UUID v7 shared by both the access and refresh tokens as their "jti" claim.
+	// It uniquely identifies the session. Use it as the primary key for your session store
+	// to associate metadata such as device, IP address, or last-seen time, and as
+	// the lookup key for access token revocation.
 	SessionID string
 }
 
 // Claims represents the verified payload extracted from an access token.
 // It is returned by VerifyAccessToken after successful signature and
 // expiry validation.
-type Claims struct {
+//
+// T is the application-specific type passed to jwt.New. It corresponds to
+// the "extra" field in the token payload.
+type Claims[T any] struct {
 	// Subject is the "sub" claim — the unique user identifier supplied
 	// when CreateTokens was called.
 	Subject string
@@ -55,8 +53,11 @@ type Claims struct {
 	// Issuer is the "iss" claim as configured in jwt.Config.Issuer.
 	Issuer string
 
-	// TokenID is the "jti" claim. Only present in refresh tokens.
-	// Empty for access tokens.
+	// Audience is the "aud" claim — the intended recipients of the token,
+	// as configured in jwt.Config.Audience.
+	Audience []string
+
+	// TokenID is the "jti" claim — the unique identifier of this access token.
 	TokenID string
 
 	// IssuedAt is when the token was created (the "iat" claim).
@@ -64,4 +65,8 @@ type Claims struct {
 
 	// ExpiresAt is when the token expires (the "exp" claim).
 	ExpiresAt time.Time
+
+	// Extra holds the application-specific claims embedded in the token.
+	// These are the values passed to CreateTokens or RotateTokens.
+	Extra T
 }

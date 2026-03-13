@@ -21,19 +21,27 @@ type Config struct {
 	// Defaults to "github.com/Jaro-c/authcore".
 	// Override this with your own service URL or identifier (e.g. "https://auth.example.com").
 	Issuer string
+
+	// Audience is the list of intended recipients embedded in the "aud" claim of every token.
+	// Verifiers use this to confirm that a token was issued for their service.
+	// Defaults to ["github.com/Jaro-c/authcore"].
+	// Override this with your own service identifiers (e.g. ["https://api.example.com"]).
+	Audience []string
 }
 
 // DefaultConfig returns a Config with safe, production-ready defaults.
 //
 //	cfg := jwt.DefaultConfig()
-//	cfg.AccessTokenTTL = 5 * time.Minute          // tighten for high-security APIs
-//	cfg.Issuer = "https://auth.example.com"        // override with your service URL
-//	jwtMod, err := jwt.New(auth, cfg)
+//	cfg.AccessTokenTTL = 5 * time.Minute                        // tighten for high-security APIs
+//	cfg.Issuer   = "https://auth.example.com"                   // override with your service URL
+//	cfg.Audience = []string{"https://api.example.com"}          // override with your API URL
+//	jwtMod, err := jwt.New[MyClaims](auth, cfg)
 func DefaultConfig() Config {
 	return Config{
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
 		Issuer:          "github.com/Jaro-c/authcore",
+		Audience:        []string{"github.com/Jaro-c/authcore"},
 	}
 }
 
@@ -49,6 +57,9 @@ func applyDefaults(cfg Config) Config {
 	if cfg.Issuer == "" {
 		cfg.Issuer = def.Issuer
 	}
+	if len(cfg.Audience) == 0 {
+		cfg.Audience = def.Audience
+	}
 	return cfg
 }
 
@@ -62,6 +73,9 @@ func validateConfig(cfg Config) error {
 			"refresh token TTL (%s) must be greater than access token TTL (%s)",
 			cfg.RefreshTokenTTL, cfg.AccessTokenTTL,
 		)
+	}
+	if len(cfg.Audience) == 0 {
+		return fmt.Errorf("audience must contain at least one value")
 	}
 	return nil
 }

@@ -65,11 +65,11 @@ func newFakeProvider(t *testing.T) *fakeProvider {
 // epoch is the fixed reference time used in all time-sensitive tests.
 var epoch = time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
 
-// newTestJWT constructs a JWT with the given config and a fixed clock pinned
+// newTestJWT constructs a JWT[T] with the given config and a fixed clock pinned
 // to epoch. The clock can be overridden per-test by assigning j.clock.
-func newTestJWT(t *testing.T, p authcore.Provider, cfg Config) *JWT {
+func newTestJWT[T any](t *testing.T, p authcore.Provider, cfg Config) *JWT[T] {
 	t.Helper()
-	j, err := New(p, cfg)
+	j, err := New[T](p, cfg)
 	if err != nil {
 		t.Fatalf("jwt.New() unexpected error: %v", err)
 	}
@@ -77,10 +77,31 @@ func newTestJWT(t *testing.T, p authcore.Provider, cfg Config) *JWT {
 	return j
 }
 
+// tokenHeader decodes the JOSE header of a compact JWT string.
+func tokenHeader(t *testing.T, tokenStr string) map[string]any {
+	t.Helper()
+	parts := strings.SplitN(tokenStr, ".", 3)
+	if len(parts) != 3 {
+		t.Fatalf("token has %d parts, want 3", len(parts))
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	var h map[string]any
+	if err := json.Unmarshal(data, &h); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	return h
+}
+
+// testSubject is a valid UUID v7 used across most tests.
+const testSubject = "0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001"
+
 // ---- New() ------------------------------------------------------------------
 
 func TestNew_defaultConfigSucceeds(t *testing.T) {
-	_, err := New(newFakeProvider(t), DefaultConfig())
+	_, err := New[struct{}](newFakeProvider(t), DefaultConfig())
 	if err != nil {
 		t.Fatalf("New(DefaultConfig) error = %v", err)
 	}
@@ -90,7 +111,7 @@ func TestNew_negativeTTLReturnsError(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AccessTokenTTL = -1 * time.Second
 
-	_, err := New(newFakeProvider(t), cfg)
+	_, err := New[struct{}](newFakeProvider(t), cfg)
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("expected ErrInvalidConfig, got %v", err)
 	}
@@ -101,14 +122,14 @@ func TestNew_refreshTTLShorterThanAccessReturnsError(t *testing.T) {
 	cfg.AccessTokenTTL = 30 * time.Minute
 	cfg.RefreshTokenTTL = 15 * time.Minute // shorter than access
 
-	_, err := New(newFakeProvider(t), cfg)
+	_, err := New[struct{}](newFakeProvider(t), cfg)
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("expected ErrInvalidConfig, got %v", err)
 	}
 }
 
 func TestNew_implementsModule(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
 	var _ authcore.Module = j // compile-time checked by var _ above, belt+braces here
 	if j.Name() != "jwt" {
 		t.Errorf("Name() = %q, want %q", j.Name(), "jwt")
@@ -118,8 +139,8 @@ func TestNew_implementsModule(t *testing.T) {
 // ---- CreateTokens() ---------------------------------------------------------
 
 func TestCreateTokens_returnsNonEmptyPair(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, err := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, err := j.CreateTokens(testSubject, struct{}{})
 	if err != nil {
 		t.Fatalf("CreateTokens() error = %v", err)
 	}
@@ -141,7 +162,7 @@ func TestCreateTokens_returnsNonEmptyPair(t *testing.T) {
 }
 
 func TestCreateTokens_invalidSubjectReturnsError(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
 
 	cases := []string{
 		"",
@@ -155,7 +176,7 @@ func TestCreateTokens_invalidSubjectReturnsError(t *testing.T) {
 		"550e8400-e29b-61d4-a716-446655440000",   // v6 — rejected
 	}
 	for _, tc := range cases {
-		_, err := j.CreateTokens(tc)
+		_, err := j.CreateTokens(tc, struct{}{})
 		if !errors.Is(err, ErrInvalidSubject) {
 			t.Errorf("subject %q: expected ErrInvalidSubject, got %v", tc, err)
 		}
@@ -163,10 +184,10 @@ func TestCreateTokens_invalidSubjectReturnsError(t *testing.T) {
 }
 
 func TestCreateTokens_uppercaseUUIDIsNormalised(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
 
 	upper := "0191B432-B5A7-7C4F-B2E6-7A3F1D2E0000"
-	pair, err := j.CreateTokens(upper)
+	pair, err := j.CreateTokens(upper, struct{}{})
 	if err != nil {
 		t.Fatalf("uppercase UUID v7 should be accepted, got %v", err)
 	}
@@ -178,22 +199,22 @@ func TestCreateTokens_uppercaseUUIDIsNormalised(t *testing.T) {
 }
 
 func TestCreateTokens_validUUIDVersionsAreAccepted(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
 
 	cases := []string{
 		"0191b432-b5a7-7c4f-b2e6-7a3f1d2e4c5a", // v7 lowercase
 		"0191B432-B5A7-7C4F-B2E6-7A3F1D2E4C5A", // v7 uppercase
 	}
 	for _, tc := range cases {
-		if _, err := j.CreateTokens(tc); err != nil {
+		if _, err := j.CreateTokens(tc, struct{}{}); err != nil {
 			t.Errorf("subject %q: unexpected error %v", tc, err)
 		}
 	}
 }
 
 func TestCreateTokens_subjectPreservedInAccessToken(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0042")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0042", struct{}{})
 
 	claims, err := j.VerifyAccessToken(pair.AccessToken)
 	if err != nil {
@@ -207,8 +228,8 @@ func TestCreateTokens_subjectPreservedInAccessToken(t *testing.T) {
 func TestCreateTokens_issuerPreservedInClaims(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Issuer = "my-service"
-	j := newTestJWT(t, newFakeProvider(t), cfg)
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	claims, _ := j.VerifyAccessToken(pair.AccessToken)
 	if claims.Issuer != "my-service" {
@@ -217,17 +238,17 @@ func TestCreateTokens_issuerPreservedInClaims(t *testing.T) {
 }
 
 func TestCreateTokens_accessAndRefreshTokensAreDifferent(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 	if pair.AccessToken == pair.RefreshToken {
 		t.Error("AccessToken and RefreshToken must not be equal")
 	}
 }
 
 func TestCreateTokens_consecutiveCallsProduceUniqueRefreshTokens(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	p1, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-	p2, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	p1, _ := j.CreateTokens(testSubject, struct{}{})
+	p2, _ := j.CreateTokens(testSubject, struct{}{})
 	if p1.RefreshToken == p2.RefreshToken {
 		t.Error("consecutive CreateTokens calls must not produce equal refresh tokens")
 	}
@@ -239,9 +260,9 @@ func TestCreateTokens_consecutiveCallsProduceUniqueRefreshTokens(t *testing.T) {
 func TestCreateTokens_accessTokenExpiryIsCorrect(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AccessTokenTTL = 5 * time.Minute
-	j := newTestJWT(t, newFakeProvider(t), cfg)
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 	claims, _ := j.VerifyAccessToken(pair.AccessToken)
 
 	want := epoch.Add(5 * time.Minute)
@@ -254,9 +275,9 @@ func TestCreateTokens_expiryFieldsMatchConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AccessTokenTTL = 5 * time.Minute
 	cfg.RefreshTokenTTL = 12 * time.Hour
-	j := newTestJWT(t, newFakeProvider(t), cfg)
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	wantAccess := epoch.Add(5 * time.Minute)
 	if !pair.AccessTokenExpiresAt.Equal(wantAccess) {
@@ -270,8 +291,8 @@ func TestCreateTokens_expiryFieldsMatchConfig(t *testing.T) {
 }
 
 func TestCreateTokens_refreshHashMatchesHashRefreshToken(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	got := j.HashRefreshToken(pair.RefreshToken)
 	if got != pair.RefreshTokenHash {
@@ -280,14 +301,12 @@ func TestCreateTokens_refreshHashMatchesHashRefreshToken(t *testing.T) {
 }
 
 func TestCreateTokens_sessionIDIsUUIDv7(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	if pair.SessionID == "" {
 		t.Fatal("SessionID is empty")
 	}
-	// UUID v7: version digit at position 14 must be '7',
-	// variant nibble at position 19 must be 8, 9, a, or b.
 	id := pair.SessionID
 	if len(id) != 36 {
 		t.Fatalf("SessionID length = %d, want 36", len(id))
@@ -301,19 +320,200 @@ func TestCreateTokens_sessionIDIsUUIDv7(t *testing.T) {
 }
 
 func TestCreateTokens_consecutiveSessionIDsAreUnique(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	p1, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-	p2, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	p1, _ := j.CreateTokens(testSubject, struct{}{})
+	p2, _ := j.CreateTokens(testSubject, struct{}{})
 	if p1.SessionID == p2.SessionID {
 		t.Error("consecutive CreateTokens calls must not produce equal SessionIDs")
+	}
+}
+
+// ---- audience ---------------------------------------------------------------
+
+func TestCreateTokens_audienceEmbeddedInAccessToken(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Audience = []string{"https://api.example.com"}
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	claims, err := j.VerifyAccessToken(pair.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken() error = %v", err)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != "https://api.example.com" {
+		t.Errorf("Audience = %v, want [https://api.example.com]", claims.Audience)
+	}
+}
+
+func TestCreateTokens_wrongAudienceRejectsToken(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Audience = []string{"https://api.example.com"}
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	// Verify with a different audience config — must fail.
+	cfg2 := DefaultConfig()
+	cfg2.Audience = []string{"https://other.example.com"}
+	j2 := newTestJWT[struct{}](t, newFakeProvider(t), cfg2)
+	j2.priv = j.priv
+	j2.pub = j.pub
+
+	_, err := j2.VerifyAccessToken(pair.AccessToken)
+	if err == nil {
+		t.Error("expected error when audience does not match, got nil")
+	}
+}
+
+func TestRotateTokens_audienceEmbeddedInRefreshToken(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Audience = []string{"https://api.example.com"}
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	// Rotation must succeed — refresh token carries the same audience.
+	j.clock = clock.Fixed(epoch.Add(time.Second))
+	_, err := j.RotateTokens(pair.RefreshToken, struct{}{})
+	if err != nil {
+		t.Fatalf("RotateTokens() error = %v", err)
+	}
+}
+
+// ---- custom claims ----------------------------------------------------------
+
+type testUserClaims struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+func TestCreateTokens_customClaimsRoundTrip(t *testing.T) {
+	j := newTestJWT[testUserClaims](t, newFakeProvider(t), DefaultConfig())
+	extra := testUserClaims{Name: "Juan", Role: "admin"}
+
+	pair, err := j.CreateTokens(testSubject, extra)
+	if err != nil {
+		t.Fatalf("CreateTokens() error = %v", err)
+	}
+
+	claims, err := j.VerifyAccessToken(pair.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken() error = %v", err)
+	}
+	if claims.Extra.Name != "Juan" {
+		t.Errorf("Extra.Name = %q, want %q", claims.Extra.Name, "Juan")
+	}
+	if claims.Extra.Role != "admin" {
+		t.Errorf("Extra.Role = %q, want %q", claims.Extra.Role, "admin")
+	}
+}
+
+func TestCreateTokens_refreshTokenHasNoExtraClaims(t *testing.T) {
+	j := newTestJWT[testUserClaims](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, testUserClaims{Name: "Juan", Role: "admin"})
+
+	// Decode the refresh token payload and verify "extra" is absent.
+	parts := strings.SplitN(pair.RefreshToken, ".", 3)
+	data, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal refresh payload: %v", err)
+	}
+	if _, ok := payload["extra"]; ok {
+		t.Error("refresh token payload must not contain 'extra' field")
+	}
+}
+
+func TestCreateTokens_refreshTokenHasIat(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	parts := strings.SplitN(pair.RefreshToken, ".", 3)
+	data, _ := base64.RawURLEncoding.DecodeString(parts[1])
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal refresh payload: %v", err)
+	}
+	if _, ok := payload["iat"]; !ok {
+		t.Error("refresh token payload must contain 'iat' field")
+	}
+}
+
+// ---- kid header -------------------------------------------------------------
+
+func TestCreateTokens_accessTokenHeaderContainsKid(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	h := tokenHeader(t, pair.AccessToken)
+	kid, ok := h["kid"].(string)
+	if !ok || kid == "" {
+		t.Errorf("access token header missing or empty kid: %v", h)
+	}
+	if kid != "test0000test0000" {
+		t.Errorf("kid = %q, want %q", kid, "test0000test0000")
+	}
+}
+
+func TestCreateTokens_refreshTokenHeaderContainsKid(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	h := tokenHeader(t, pair.RefreshToken)
+	kid, ok := h["kid"].(string)
+	if !ok || kid == "" {
+		t.Errorf("refresh token header missing or empty kid: %v", h)
+	}
+	if kid != "test0000test0000" {
+		t.Errorf("kid = %q, want %q", kid, "test0000test0000")
+	}
+}
+
+func TestCreateTokens_bothTokensShareSameKid(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	accessKid := tokenHeader(t, pair.AccessToken)["kid"]
+	refreshKid := tokenHeader(t, pair.RefreshToken)["kid"]
+	if accessKid != refreshKid {
+		t.Errorf("access kid %q != refresh kid %q", accessKid, refreshKid)
+	}
+}
+
+// ---- access token jti -------------------------------------------------------
+
+func TestCreateTokens_sessionIDIsUUIDv7Format(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	id := pair.SessionID
+	if len(id) != 36 {
+		t.Fatalf("SessionID length = %d, want 36", len(id))
+	}
+	if id[14] != '7' {
+		t.Errorf("SessionID version digit = %q, want '7'", id[14])
+	}
+	if id[19] != '8' && id[19] != '9' && id[19] != 'a' && id[19] != 'b' {
+		t.Errorf("SessionID variant nibble = %q, want 8/9/a/b", id[19])
+	}
+}
+
+func TestCreateTokens_accessAndRefreshShareSameJTI(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
+
+	claims, err := j.VerifyAccessToken(pair.AccessToken)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken() error = %v", err)
+	}
+	if claims.TokenID != pair.SessionID {
+		t.Errorf("access token jti %q must equal SessionID %q", claims.TokenID, pair.SessionID)
 	}
 }
 
 // ---- VerifyAccessToken() ----------------------------------------------------
 
 func TestVerifyAccessToken_validTokenReturnsCorrectClaims(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0099")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0099", struct{}{})
 
 	claims, err := j.VerifyAccessToken(pair.AccessToken)
 	if err != nil {
@@ -330,9 +530,9 @@ func TestVerifyAccessToken_validTokenReturnsCorrectClaims(t *testing.T) {
 func TestVerifyAccessToken_expiredTokenReturnsErrTokenExpired(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AccessTokenTTL = 10 * time.Minute
-	j := newTestJWT(t, newFakeProvider(t), cfg)
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	// Advance clock past expiry.
 	j.clock = clock.Fixed(epoch.Add(11 * time.Minute))
@@ -346,9 +546,9 @@ func TestVerifyAccessToken_expiredTokenReturnsErrTokenExpired(t *testing.T) {
 func TestVerifyAccessToken_tokenAtExactExpiryIsExpired(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.AccessTokenTTL = 10 * time.Minute
-	j := newTestJWT(t, newFakeProvider(t), cfg)
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 	// golang-jwt/v5 uses strict now.After(exp), so the token is still valid at
 	// the exact expiry second. Advance one second past exp to trigger expiry.
 	j.clock = clock.Fixed(epoch.Add(10*time.Minute + time.Second))
@@ -360,8 +560,8 @@ func TestVerifyAccessToken_tokenAtExactExpiryIsExpired(t *testing.T) {
 }
 
 func TestVerifyAccessToken_tamperedSignatureReturnsErrTokenInvalid(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	// Modify a middle character of the signature segment to guarantee the
 	// decoded bytes change. The last base64url char of an Ed25519 signature
@@ -383,7 +583,7 @@ func TestVerifyAccessToken_tamperedSignatureReturnsErrTokenInvalid(t *testing.T)
 }
 
 func TestVerifyAccessToken_malformedTokenReturnsErrTokenMalformed(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
 
 	cases := []string{"", "only-one-part", "two.parts", "a.b.c.d"}
 	for _, tc := range cases {
@@ -395,8 +595,8 @@ func TestVerifyAccessToken_malformedTokenReturnsErrTokenMalformed(t *testing.T) 
 }
 
 func TestVerifyAccessToken_rejectsRefreshToken(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	_, err := j.VerifyAccessToken(pair.RefreshToken)
 	if !errors.Is(err, ErrWrongTokenType) {
@@ -408,10 +608,10 @@ func TestVerifyAccessToken_rejectsTokenFromDifferentKey(t *testing.T) {
 	p1 := newFakeProvider(t)
 	p2 := newFakeProvider(t) // different Ed25519 key pair
 
-	j1 := newTestJWT(t, p1, DefaultConfig())
-	j2 := newTestJWT(t, p2, DefaultConfig())
+	j1 := newTestJWT[struct{}](t, p1, DefaultConfig())
+	j2 := newTestJWT[struct{}](t, p2, DefaultConfig())
 
-	pair, _ := j1.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j1.CreateTokens(testSubject, struct{}{})
 
 	_, err := j2.VerifyAccessToken(pair.AccessToken)
 	if !errors.Is(err, ErrTokenInvalid) {
@@ -422,8 +622,8 @@ func TestVerifyAccessToken_rejectsTokenFromDifferentKey(t *testing.T) {
 // ---- HashRefreshToken() -----------------------------------------------------
 
 func TestHashRefreshToken_isDeterministic(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	h1 := j.HashRefreshToken(pair.RefreshToken)
 	h2 := j.HashRefreshToken(pair.RefreshToken)
@@ -433,9 +633,9 @@ func TestHashRefreshToken_isDeterministic(t *testing.T) {
 }
 
 func TestHashRefreshToken_differentTokensDifferentHashes(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	p1, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-	p2, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	p1, _ := j.CreateTokens(testSubject, struct{}{})
+	p2, _ := j.CreateTokens(testSubject, struct{}{})
 
 	if j.HashRefreshToken(p1.RefreshToken) == j.HashRefreshToken(p2.RefreshToken) {
 		t.Error("different refresh tokens must produce different HMAC digests")
@@ -443,11 +643,11 @@ func TestHashRefreshToken_differentTokensDifferentHashes(t *testing.T) {
 }
 
 func TestHashRefreshToken_differentSecretsDifferentHashes(t *testing.T) {
-	j1 := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	j2 := newTestJWT(t, newFakeProvider(t), DefaultConfig())
+	j1 := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	j2 := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
 
 	// Sign a token with j1's key, hash it with both modules' secrets.
-	pair, _ := j1.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j1.CreateTokens(testSubject, struct{}{})
 
 	h1 := j1.HashRefreshToken(pair.RefreshToken)
 	h2 := j2.HashRefreshToken(pair.RefreshToken)
@@ -461,10 +661,10 @@ func TestHashRefreshToken_differentSecretsDifferentHashes(t *testing.T) {
 // ---- RotateTokens() ---------------------------------------------------------
 
 func TestRotateTokens_returnsNewPairForSameSubject(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	old, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0007")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	old, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0007", struct{}{})
 
-	newPair, err := j.RotateTokens(old.RefreshToken)
+	newPair, err := j.RotateTokens(old.RefreshToken, struct{}{})
 	if err != nil {
 		t.Fatalf("RotateTokens() error = %v", err)
 	}
@@ -476,12 +676,12 @@ func TestRotateTokens_returnsNewPairForSameSubject(t *testing.T) {
 }
 
 func TestRotateTokens_newTokensDifferFromOld(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	old, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	old, _ := j.CreateTokens(testSubject, struct{}{})
 
 	// Advance clock by 1 second so the issued-at differs.
 	j.clock = clock.Fixed(epoch.Add(time.Second))
-	newPair, _ := j.RotateTokens(old.RefreshToken)
+	newPair, _ := j.RotateTokens(old.RefreshToken, struct{}{})
 
 	if newPair.AccessToken == old.AccessToken {
 		t.Error("new AccessToken must differ from old AccessToken")
@@ -497,32 +697,32 @@ func TestRotateTokens_newTokensDifferFromOld(t *testing.T) {
 func TestRotateTokens_expiredRefreshTokenReturnsErrTokenExpired(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RefreshTokenTTL = 24 * time.Hour
-	j := newTestJWT(t, newFakeProvider(t), cfg)
+	j := newTestJWT[struct{}](t, newFakeProvider(t), cfg)
 
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	// Advance past refresh token TTL.
 	j.clock = clock.Fixed(epoch.Add(25 * time.Hour))
 
-	_, err := j.RotateTokens(pair.RefreshToken)
+	_, err := j.RotateTokens(pair.RefreshToken, struct{}{})
 	if !errors.Is(err, ErrTokenExpired) {
 		t.Errorf("expected ErrTokenExpired, got %v", err)
 	}
 }
 
 func TestRotateTokens_rejectsAccessToken(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
-	_, err := j.RotateTokens(pair.AccessToken)
+	_, err := j.RotateTokens(pair.AccessToken, struct{}{})
 	if !errors.Is(err, ErrWrongTokenType) {
 		t.Errorf("expected ErrWrongTokenType, got %v", err)
 	}
 }
 
 func TestRotateTokens_rejectsTamperedToken(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	rt := pair.RefreshToken
 	midRT := len(rt) - 10
@@ -532,18 +732,18 @@ func TestRotateTokens_rejectsTamperedToken(t *testing.T) {
 		replacementRT = 'B'
 	}
 	tampered := rt[:midRT] + string(replacementRT) + rt[midRT+1:]
-	_, err := j.RotateTokens(tampered)
+	_, err := j.RotateTokens(tampered, struct{}{})
 	if !errors.Is(err, ErrTokenInvalid) && !errors.Is(err, ErrTokenMalformed) {
 		t.Errorf("expected ErrTokenInvalid or ErrTokenMalformed, got %v", err)
 	}
 }
 
 func TestRotateTokens_newHashMatchesHashRefreshToken(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	pair, _ := j.CreateTokens(testSubject, struct{}{})
 
 	j.clock = clock.Fixed(epoch.Add(time.Second))
-	newPair, _ := j.RotateTokens(pair.RefreshToken)
+	newPair, _ := j.RotateTokens(pair.RefreshToken, struct{}{})
 
 	got := j.HashRefreshToken(newPair.RefreshToken)
 	if got != newPair.RefreshTokenHash {
@@ -551,101 +751,19 @@ func TestRotateTokens_newHashMatchesHashRefreshToken(t *testing.T) {
 	}
 }
 
-// ---- kid header -------------------------------------------------------------
+func TestRotateTokens_freshClaimsEmbeddedInNewAccessToken(t *testing.T) {
+	j := newTestJWT[testUserClaims](t, newFakeProvider(t), DefaultConfig())
+	old, _ := j.CreateTokens(testSubject, testUserClaims{Name: "Juan", Role: "user"})
 
-// tokenHeader decodes the JOSE header of a compact JWT string.
-func tokenHeader(t *testing.T, tokenStr string) map[string]any {
-	t.Helper()
-	parts := strings.SplitN(tokenStr, ".", 3)
-	if len(parts) != 3 {
-		t.Fatalf("token has %d parts, want 3", len(parts))
-	}
-	data, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		t.Fatalf("decode header: %v", err)
-	}
-	var h map[string]any
-	if err := json.Unmarshal(data, &h); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	return h
-}
+	j.clock = clock.Fixed(epoch.Add(time.Second))
+	fresh := testUserClaims{Name: "Juan", Role: "admin"} // role promoted
+	newPair, _ := j.RotateTokens(old.RefreshToken, fresh)
 
-func TestCreateTokens_accessTokenHeaderContainsKid(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-
-	h := tokenHeader(t, pair.AccessToken)
-	kid, ok := h["kid"].(string)
-	if !ok || kid == "" {
-		t.Errorf("access token header missing or empty kid: %v", h)
-	}
-	if kid != "test0000test0000" {
-		t.Errorf("kid = %q, want %q", kid, "test0000test0000")
-	}
-}
-
-func TestCreateTokens_refreshTokenHeaderContainsKid(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-
-	h := tokenHeader(t, pair.RefreshToken)
-	kid, ok := h["kid"].(string)
-	if !ok || kid == "" {
-		t.Errorf("refresh token header missing or empty kid: %v", h)
-	}
-	if kid != "test0000test0000" {
-		t.Errorf("kid = %q, want %q", kid, "test0000test0000")
-	}
-}
-
-func TestCreateTokens_bothTokensShareSameKid(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-
-	accessKid := tokenHeader(t, pair.AccessToken)["kid"]
-	refreshKid := tokenHeader(t, pair.RefreshToken)["kid"]
-	if accessKid != refreshKid {
-		t.Errorf("access kid %q != refresh kid %q", accessKid, refreshKid)
-	}
-}
-
-// ---- access token jti -------------------------------------------------------
-
-func TestCreateTokens_accessTokenIDIsUUIDv7(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-
-	id := pair.AccessTokenID
-	if len(id) != 36 {
-		t.Fatalf("AccessTokenID length = %d, want 36", len(id))
-	}
-	if id[14] != '7' {
-		t.Errorf("AccessTokenID version digit = %q, want '7'", id[14])
-	}
-	if id[19] != '8' && id[19] != '9' && id[19] != 'a' && id[19] != 'b' {
-		t.Errorf("AccessTokenID variant nibble = %q, want 8/9/a/b", id[19])
-	}
-}
-
-func TestCreateTokens_accessTokenIDExposedInClaims(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-
-	claims, err := j.VerifyAccessToken(pair.AccessToken)
+	claims, err := j.VerifyAccessToken(newPair.AccessToken)
 	if err != nil {
 		t.Fatalf("VerifyAccessToken() error = %v", err)
 	}
-	if claims.TokenID != pair.AccessTokenID {
-		t.Errorf("Claims.TokenID = %q, want %q", claims.TokenID, pair.AccessTokenID)
-	}
-}
-
-func TestCreateTokens_accessAndRefreshJTIsAreDifferent(t *testing.T) {
-	j := newTestJWT(t, newFakeProvider(t), DefaultConfig())
-	pair, _ := j.CreateTokens("0191b432-b5a7-7c4f-b2e6-7a3f1d2e0001")
-
-	if pair.AccessTokenID == pair.SessionID {
-		t.Error("access token jti and refresh token jti must not be equal")
+	if claims.Extra.Role != "admin" {
+		t.Errorf("Extra.Role after rotation = %q, want %q", claims.Extra.Role, "admin")
 	}
 }

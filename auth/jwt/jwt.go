@@ -10,6 +10,19 @@
 //   - Access token  — short-lived (default 15 min), sent in Authorization: Bearer.
 //   - Refresh token — long-lived  (default 24 h),  stored securely by the client.
 //
+// # Custom claims
+//
+// JWT is generic over T, which holds application-specific fields embedded
+// in the access token payload under the "extra" key. The refresh token never
+// carries custom claims.
+//
+//	type UserClaims struct {
+//	    Name string `json:"name"`
+//	    Role string `json:"role"`
+//	}
+//
+//	jwtMod, _ := jwt.New[UserClaims](auth, jwt.DefaultConfig())
+//
 // # Storage model
 //
 // The library is storage-agnostic. It returns a hashed form of the refresh
@@ -20,21 +33,23 @@
 //
 //	// 1. Initialise once at startup.
 //	auth, _    := authcore.New(authcore.DefaultConfig())
-//	jwtMod, _ := jwt.New(auth, jwt.DefaultConfig())
+//	jwtMod, _ := jwt.New[UserClaims](auth, jwt.DefaultConfig())
 //
 //	// 2. Login — create a token pair for the authenticated user.
-//	pair, _ := jwtMod.CreateTokens(userID)
+//	pair, _ := jwtMod.CreateTokens(userID, UserClaims{Name: "Juan", Role: "admin"})
 //	sendToBrowser(pair.AccessToken, pair.RefreshToken)
 //	db.StoreRefreshHash(userID, pair.RefreshTokenHash)
 //
 //	// 3. Authenticated request — verify the access token on each call.
 //	claims, err := jwtMod.VerifyAccessToken(accessToken)
 //	if err != nil { ... } // errors.Is(err, jwt.ErrTokenExpired)
+//	fmt.Println(claims.Extra.Name)
 //
 //	// 4. Token rotation — when the client presents a refresh token.
 //	oldHash := jwtMod.HashRefreshToken(clientToken)
 //	if !db.Exists(oldHash) { return http.StatusUnauthorized }
-//	newPair, _ := jwtMod.RotateTokens(clientToken)
+//	user, _ := db.GetUser(userID)
+//	newPair, _ := jwtMod.RotateTokens(clientToken, UserClaims{Name: user.Name, Role: user.Role})
 //	db.ReplaceRefreshHash(oldHash, newPair.RefreshTokenHash)
 //	sendToBrowser(newPair.AccessToken, newPair.RefreshToken)
 package jwt
@@ -54,14 +69,17 @@ import (
 // Position 19 (variant byte) must be 8, 9, a, or b (RFC 4122 variant).
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// Compile-time assertion: *JWT must satisfy authcore.Module.
-var _ authcore.Module = (*JWT)(nil)
+// Compile-time assertion: *JWT[struct{}] must satisfy authcore.Module.
+var _ authcore.Module = (*JWT[struct{}])(nil)
 
 // JWT is the authentication module for JSON Web Tokens.
 //
+// T is the application-specific type embedded in access token payloads under
+// the "extra" key. Use struct{} if no custom claims are needed.
+//
 // Construct one instance at application startup using New and share it
 // across all goroutines. JWT is safe for concurrent use after construction.
-type JWT struct {
+type JWT[T any] struct {
 	cfg    Config
 	log    authcore.Logger
 	priv   ed25519.PrivateKey
@@ -73,20 +91,22 @@ type JWT struct {
 
 // New creates and returns a JWT module.
 //
+// T is the application-specific claims type embedded in access tokens.
+// Use struct{} if no custom claims are needed:
+//
+//	jwtMod, err := jwt.New[struct{}](auth, jwt.DefaultConfig())
+//
 // p provides the Ed25519 signing keys, the HMAC secret, the logger, and the
 // timezone — all sourced from the parent AuthCore instance.
 // cfg controls token lifetimes and the issuer claim.
-//
-//	jwtMod, err := jwt.New(auth, jwt.DefaultConfig())
-//	if err != nil { log.Fatal(err) }
-func New(p authcore.Provider, cfg Config) (*JWT, error) {
+func New[T any](p authcore.Provider, cfg Config) (*JWT[T], error) {
 	cfg = applyDefaults(cfg)
 
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 
-	j := &JWT{
+	j := &JWT[T]{
 		cfg:    cfg,
 		log:    p.Logger(),
 		priv:   p.Keys().PrivateKey(),
@@ -103,7 +123,7 @@ func New(p authcore.Provider, cfg Config) (*JWT, error) {
 }
 
 // Name returns the module's unique identifier. It implements authcore.Module.
-func (j *JWT) Name() string { return "jwt" }
+func (j *JWT[T]) Name() string { return "jwt" }
 
 // CreateTokens generates a new access and refresh token pair for subject.
 //
@@ -111,6 +131,10 @@ func (j *JWT) Name() string { return "jwt" }
 // in the "sub" JWT claim and returned in Claims.Subject after verification.
 // Only UUID v7 is accepted (RFC 9562 §5.7); any casing is allowed — the value
 // is normalised to lowercase before signing.
+//
+// extra holds the application-specific claims embedded in the access token
+// under the "extra" key. Use struct{}{} if no custom claims are needed.
+// The refresh token never carries extra claims.
 //
 // The returned TokenPair contains:
 //
@@ -120,9 +144,10 @@ func (j *JWT) Name() string { return "jwt" }
 //	pair.RefreshToken          — store in a secure, httpOnly client-side location
 //	pair.RefreshTokenExpiresAt — when the user must log in again
 //	pair.RefreshTokenHash      — store in your database; never store the raw token
+//	pair.SessionID             — UUID v7 jti of the refresh token; primary key for session store
 //
 // The library does not persist any of these values.
-func (j *JWT) CreateTokens(subject string) (*TokenPair, error) {
+func (j *JWT[T]) CreateTokens(subject string, extra T) (*TokenPair, error) {
 	subject = strings.ToLower(subject)
 	if !uuidRe.MatchString(subject) {
 		return nil, ErrInvalidSubject
@@ -130,42 +155,40 @@ func (j *JWT) CreateTokens(subject string) (*TokenPair, error) {
 
 	now := j.clock.Now()
 
-	// ----- Access token -----
-	accessJTI, err := generateJTI(now)
+	// Both tokens share the same JTI — it identifies the session.
+	jti, err := generateJTI(now)
 	if err != nil {
 		return nil, err
 	}
-	accessToken, err := signToken(newAccessClaims(j.cfg.Issuer, subject, accessJTI, now, j.cfg.AccessTokenTTL), j.priv, j.kid)
+
+	// ----- Access token -----
+	accessToken, err := signToken(newAccessClaims(j.cfg.Issuer, subject, jti, j.cfg.Audience, extra, now, j.cfg.AccessTokenTTL), j.priv, j.kid)
 	if err != nil {
 		return nil, fmt.Errorf("sign access token: %w", err)
 	}
 
-	// ----- Refresh token (carries a jti for rotation tracking) -----
-	refreshJTI, err := generateJTI(now)
-	if err != nil {
-		return nil, err
-	}
-	refreshToken, err := signToken(newRefreshClaims(j.cfg.Issuer, subject, refreshJTI, now, j.cfg.RefreshTokenTTL), j.priv, j.kid)
+	// ----- Refresh token (no extra) -----
+	refreshToken, err := signToken(newRefreshClaims(j.cfg.Issuer, subject, jti, j.cfg.Audience, now, j.cfg.RefreshTokenTTL), j.priv, j.kid)
 	if err != nil {
 		return nil, fmt.Errorf("sign refresh token: %w", err)
 	}
 
-	j.log.Debug("jwt: token pair created (sub=%s, access_jti=%s, refresh_jti=%s)", subject, accessJTI, refreshJTI)
+	j.log.Debug("jwt: token pair created (sub=%s, jti=%s)", subject, jti)
 
 	return &TokenPair{
 		AccessToken:           accessToken,
-		AccessTokenID:         accessJTI,
 		AccessTokenExpiresAt:  now.Add(j.cfg.AccessTokenTTL),
 		RefreshToken:          refreshToken,
 		RefreshTokenExpiresAt: now.Add(j.cfg.RefreshTokenTTL),
 		RefreshTokenHash:      computeHMAC(refreshToken, j.secret),
-		SessionID:             refreshJTI,
+		SessionID:             jti,
 	}, nil
 }
 
 // VerifyAccessToken parses and validates an access token string.
 //
-// On success it returns the verified Claims extracted from the token payload.
+// On success it returns the verified Claims extracted from the token payload,
+// including the application-specific Extra fields.
 // On failure it returns one of the following sentinel errors:
 //
 //	jwt.ErrTokenExpired   — exp claim is in the past
@@ -177,15 +200,15 @@ func (j *JWT) CreateTokens(subject string) (*TokenPair, error) {
 //
 //	claims, err := jwtMod.VerifyAccessToken(token)
 //	if errors.Is(err, jwt.ErrTokenExpired) { ... }
-func (j *JWT) VerifyAccessToken(token string) (*Claims, error) {
-	c, err := verifyToken(token, j.pub, j.clock.Now())
+func (j *JWT[T]) VerifyAccessToken(token string) (*Claims[T], error) {
+	c, err := verifyAccessToken[T](token, j.pub, j.clock.Now(), j.cfg.Audience)
 	if err != nil {
 		return nil, err
 	}
 	if c.Type != tokenTypeAccess {
 		return nil, ErrWrongTokenType
 	}
-	return claimsToClaims(c), nil
+	return accessClaimsToClaims(c), nil
 }
 
 // HashRefreshToken returns the HMAC-SHA256 hex digest of the given token
@@ -196,13 +219,17 @@ func (j *JWT) VerifyAccessToken(token string) (*Claims, error) {
 //	hash := jwtMod.HashRefreshToken(clientToken)
 //	row, err := db.FindByHash(hash)
 //	if err != nil { return http.StatusUnauthorized }
-//	newPair, err := jwtMod.RotateTokens(clientToken)
-func (j *JWT) HashRefreshToken(token string) string {
+//	newPair, err := jwtMod.RotateTokens(clientToken, freshClaims)
+func (j *JWT[T]) HashRefreshToken(token string) string {
 	return computeHMAC(token, j.secret)
 }
 
 // RotateTokens verifies refreshToken, then generates and returns a new
-// token pair for the same subject.
+// token pair for the same subject with fresh extra claims.
+//
+// Because the refresh token does not carry application-specific data, the
+// caller must supply updated extra claims (typically re-fetched from the
+// database at rotation time).
 //
 // After a successful rotation, the old refresh token MUST be considered
 // invalid. The application must replace the stored hash atomically:
@@ -214,8 +241,8 @@ func (j *JWT) HashRefreshToken(token string) string {
 // and must happen before calling RotateTokens.
 //
 // Returns the same errors as VerifyAccessToken.
-func (j *JWT) RotateTokens(refreshToken string) (*TokenPair, error) {
-	c, err := verifyToken(refreshToken, j.pub, j.clock.Now())
+func (j *JWT[T]) RotateTokens(refreshToken string, extra T) (*TokenPair, error) {
+	c, err := verifyRefreshToken(refreshToken, j.pub, j.clock.Now(), j.cfg.Audience)
 	if err != nil {
 		return nil, err
 	}
@@ -225,5 +252,5 @@ func (j *JWT) RotateTokens(refreshToken string) (*TokenPair, error) {
 
 	j.log.Debug("jwt: rotating token (sub=%s, old_jti=%s)", c.Subject, c.ID)
 
-	return j.CreateTokens(c.Subject)
+	return j.CreateTokens(c.Subject, extra)
 }

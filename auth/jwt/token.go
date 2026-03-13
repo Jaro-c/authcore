@@ -6,9 +6,12 @@ package jwt
 //
 //	BASE64URL(header) + "." + BASE64URL(payload) + "." + BASE64URL(signature)
 //
-// Header  : {"alg":"EdDSA","typ":"JWT"}
+// Header  : {"alg":"EdDSA","kid":"<key-id>","typ":"JWT"}
 // Payload : JSON object with registered + private claims
 // Signature: Ed25519 signature over the raw "header.payload" ASCII bytes
+//
+// Access token payload : iss, sub, iat, exp, jti, type, extra
+// Refresh token payload: iss, sub, exp, jti, type  (no iat, no extra)
 
 import (
 	"crypto/ed25519"
@@ -30,34 +33,45 @@ const (
 	tokenTypeRefresh = "refresh"
 )
 
-// authClaims extends the standard RegisteredClaims with a private "type" claim
-// that distinguishes access tokens from refresh tokens.
-type authClaims struct {
+// accessClaims is the internal claim set for access tokens.
+// T carries the application-specific fields stored under the "extra" key.
+type accessClaims[T any] struct {
 	gjwt.RegisteredClaims
-	Type string `json:"type"` // "access" | "refresh"
+	Type  string `json:"type"`
+	Extra T      `json:"extra,omitempty"`
+}
+
+// refreshClaims is the minimal internal claim set for refresh tokens.
+// Refresh tokens carry no application-specific data and no iat claim.
+type refreshClaims struct {
+	gjwt.RegisteredClaims
+	Type string `json:"type"`
 }
 
 // newAccessClaims builds the claim set for an access token.
-func newAccessClaims(issuer, subject, jti string, now time.Time, ttl time.Duration) *authClaims {
-	return &authClaims{
+func newAccessClaims[T any](issuer, subject, jti string, audience []string, extra T, now time.Time, ttl time.Duration) *accessClaims[T] {
+	return &accessClaims[T]{
 		RegisteredClaims: gjwt.RegisteredClaims{
 			Issuer:    issuer,
 			Subject:   subject,
 			ID:        jti,
+			Audience:  gjwt.ClaimStrings(audience),
 			IssuedAt:  gjwt.NewNumericDate(now),
 			ExpiresAt: gjwt.NewNumericDate(now.Add(ttl)),
 		},
-		Type: tokenTypeAccess,
+		Type:  tokenTypeAccess,
+		Extra: extra,
 	}
 }
 
 // newRefreshClaims builds the claim set for a refresh token.
-func newRefreshClaims(issuer, subject, jti string, now time.Time, ttl time.Duration) *authClaims {
-	return &authClaims{
+func newRefreshClaims(issuer, subject, jti string, audience []string, now time.Time, ttl time.Duration) *refreshClaims {
+	return &refreshClaims{
 		RegisteredClaims: gjwt.RegisteredClaims{
 			Issuer:    issuer,
 			Subject:   subject,
 			ID:        jti,
+			Audience:  gjwt.ClaimStrings(audience),
 			IssuedAt:  gjwt.NewNumericDate(now),
 			ExpiresAt: gjwt.NewNumericDate(now.Add(ttl)),
 		},
@@ -67,7 +81,7 @@ func newRefreshClaims(issuer, subject, jti string, now time.Time, ttl time.Durat
 
 // signToken encodes claims as a signed EdDSA JWT and returns the compact serialisation.
 // kid is embedded in the JOSE header so verifiers can select the correct public key.
-func signToken(claims *authClaims, key ed25519.PrivateKey, kid string) (string, error) {
+func signToken(claims gjwt.Claims, key ed25519.PrivateKey, kid string) (string, error) {
 	token := gjwt.NewWithClaims(gjwt.SigningMethodEdDSA, claims)
 	token.Header["kid"] = kid
 	signed, err := token.SignedString(key)
@@ -77,26 +91,51 @@ func signToken(claims *authClaims, key ed25519.PrivateKey, kid string) (string, 
 	return signed, nil
 }
 
-// verifyToken validates the compact JWT string and returns the decoded claims.
+// verifyAccessToken validates the compact JWT string and returns the decoded access claims.
 // now is injected to allow deterministic testing via clock.Fixed.
-func verifyToken(tokenStr string, pub ed25519.PublicKey, now time.Time) (*authClaims, error) {
-	var c authClaims
+// audience is validated: the token must contain at least the first configured audience value.
+func verifyAccessToken[T any](tokenStr string, pub ed25519.PublicKey, now time.Time, audience []string) (*accessClaims[T], error) {
+	var c accessClaims[T]
 	_, err := gjwt.ParseWithClaims(
 		tokenStr, &c,
-		func(t *gjwt.Token) (any, error) {
-			if _, ok := t.Method.(*gjwt.SigningMethodEd25519); !ok {
-				return nil, fmt.Errorf("%w: unexpected alg %q", ErrTokenInvalid, t.Header["alg"])
-			}
-			return pub, nil
-		},
+		eddsaKeyFunc(pub),
 		gjwt.WithTimeFunc(func() time.Time { return now }),
 		gjwt.WithExpirationRequired(),
 		gjwt.WithIssuedAt(),
+		gjwt.WithAudience(audience[0]),
 	)
 	if err != nil {
 		return nil, mapJWTError(err)
 	}
 	return &c, nil
+}
+
+// verifyRefreshToken validates the compact JWT string and returns the decoded refresh claims.
+// audience is validated: the token must contain at least the first configured audience value.
+func verifyRefreshToken(tokenStr string, pub ed25519.PublicKey, now time.Time, audience []string) (*refreshClaims, error) {
+	var c refreshClaims
+	_, err := gjwt.ParseWithClaims(
+		tokenStr, &c,
+		eddsaKeyFunc(pub),
+		gjwt.WithTimeFunc(func() time.Time { return now }),
+		gjwt.WithExpirationRequired(),
+		gjwt.WithIssuedAt(),
+		gjwt.WithAudience(audience[0]),
+	)
+	if err != nil {
+		return nil, mapJWTError(err)
+	}
+	return &c, nil
+}
+
+// eddsaKeyFunc returns a gjwt.Keyfunc that enforces EdDSA and returns pub.
+func eddsaKeyFunc(pub ed25519.PublicKey) gjwt.Keyfunc {
+	return func(t *gjwt.Token) (any, error) {
+		if _, ok := t.Method.(*gjwt.SigningMethodEd25519); !ok {
+			return nil, fmt.Errorf("%w: unexpected alg %q", ErrTokenInvalid, t.Header["alg"])
+		}
+		return pub, nil
+	}
 }
 
 // mapJWTError converts golang-jwt sentinel errors to our public sentinels.
@@ -113,8 +152,8 @@ func mapJWTError(err error) error {
 	}
 }
 
-// claimsToClaims converts internal authClaims to the public Claims type.
-func claimsToClaims(c *authClaims) *Claims {
+// accessClaimsToClaims converts internal accessClaims to the public Claims type.
+func accessClaimsToClaims[T any](c *accessClaims[T]) *Claims[T] {
 	var iat, exp time.Time
 	if c.IssuedAt != nil {
 		iat = c.IssuedAt.Time
@@ -122,12 +161,14 @@ func claimsToClaims(c *authClaims) *Claims {
 	if c.ExpiresAt != nil {
 		exp = c.ExpiresAt.Time
 	}
-	return &Claims{
+	return &Claims[T]{
 		Subject:   c.Subject,
 		Issuer:    c.Issuer,
+		Audience:  []string(c.Audience),
 		TokenID:   c.ID,
 		IssuedAt:  iat.UTC(),
 		ExpiresAt: exp.UTC(),
+		Extra:     c.Extra,
 	}
 }
 
@@ -138,9 +179,8 @@ func computeHMAC(token string, secret []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// generateJTI returns a UUID v7 string suitable for use as the "jti" claim
-// in refresh tokens. The 48-bit timestamp comes from now; the remaining bits
-// are cryptographically random.
+// generateJTI returns a UUID v7 string suitable for use as the "jti" claim.
+// The 48-bit timestamp comes from now; the remaining bits are cryptographically random.
 //
 // Format: xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx (RFC 9562 §5.7)
 func generateJTI(now time.Time) (string, error) {
