@@ -17,6 +17,16 @@ type Config struct {
 	// (e.g. slog, zap, zerolog). When set, EnableLogs is ignored.
 	// If nil and EnableLogs is true, a default stdlib logger is used.
 	Logger Logger
+
+	// KeysDir is the directory where authcore creates and stores cryptographic
+	// key files (ed25519_private.pem, ed25519_public.pem, refresh_secret.key).
+	//
+	// Defaults to ".authcore" relative to the current working directory.
+	// Use an absolute path in containerised or restricted environments.
+	//
+	// The directory is created automatically on first use. A .gitignore is
+	// written inside it to prevent accidental commits of key material.
+	KeysDir string
 }
 
 // DefaultConfig returns a Config populated with safe, production-ready defaults.
@@ -28,19 +38,29 @@ func DefaultConfig() Config {
 	return Config{
 		EnableLogs: true,
 		Timezone:   time.UTC,
+		KeysDir:    ".authcore",
 	}
 }
 
 // applyDefaults fills zero-value fields in cfg with values from DefaultConfig.
+//
+// Note on EnableLogs: Go does not distinguish between "caller explicitly set
+// false" and "zero value false". For this reason the recommended pattern is
+// always to start from DefaultConfig() and override individual fields:
+//
+//	cfg := authcore.DefaultConfig()
+//	cfg.EnableLogs = false   // intentional opt-out
+//
+// Callers who pass an empty Config{} receive EnableLogs=false (no logs).
+// This is a deliberate safe-by-default choice: a library should never
+// produce surprise output in an application that did not ask for it.
 func applyDefaults(cfg Config) Config {
-	defaults := DefaultConfig()
-
 	if cfg.Timezone == nil {
-		cfg.Timezone = defaults.Timezone
+		cfg.Timezone = time.UTC
 	}
-	// EnableLogs intentionally keeps its zero value (false) unless the caller
-	// explicitly calls DefaultConfig or sets it to true. This prevents a
-	// default-on behaviour that could surprise callers who pass an empty Config.
+	if cfg.KeysDir == "" {
+		cfg.KeysDir = ".authcore"
+	}
 	return cfg
 }
 

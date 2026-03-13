@@ -10,42 +10,76 @@
 //
 // # Modules
 //
-// Future authentication mechanisms are organised under the auth/ sub-tree:
+// Authentication mechanisms live under the auth/ sub-tree. Each module is an
+// independent package that accepts an authcore.Provider — the narrow interface
+// that *AuthCore satisfies — so modules remain independently testable.
 //
 //	auth/jwt    — JSON Web Tokens
-//	auth/apikey — opaque API key validation
+//	auth/apikey — opaque API key generation and validation
 //	auth/oauth  — OAuth 2.0 / OIDC
 //
-// Each module receives the parent *AuthCore so it can share configuration
-// and the logger without duplicating state.
+// # Key management
+//
+// authcore automatically generates and persists cryptographic keys on first
+// run. Keys are stored in Config.KeysDir (default ".authcore") and are
+// protected by a .gitignore so they are never accidentally committed.
+//
+// # Extending authcore
+//
+// To write a new module, accept a Provider in your constructor and implement
+// the Module interface:
+//
+//	type MyModule struct { ... }
+//
+//	func New(p authcore.Provider, cfg Config) (*MyModule, error) { ... }
+//
+//	func (m *MyModule) Name() string { return "mymodule" }
 package authcore
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/Jaro-c/authcore/internal/keymanager"
+)
+
+// Compile-time proof that *AuthCore satisfies Provider.
+// If any method is missing the build fails with a clear message here.
+var _ Provider = (*AuthCore)(nil)
+
+// Compile-time proof that *keymanager.KeyManager satisfies Keys.
+var _ Keys = (*keymanager.KeyManager)(nil)
 
 // AuthCore is the central object of the library.
-// It holds shared configuration and the logger, and is the entry point for
-// all authentication sub-modules.
+// It holds shared configuration, the logger, and the key manager, and is
+// the entry point for all authentication sub-modules.
 //
 // Create one instance per application; it is safe for concurrent use.
 type AuthCore struct {
 	config Config
 	log    Logger
+	keys   Keys
 }
 
 // New creates and returns a fully initialised *AuthCore.
 //
-// cfg is merged with defaults so callers can pass a partially-filled Config:
+// It applies defaults to any zero-value fields in cfg, validates the result,
+// selects or creates a logger, and initialises the key manager.
 //
-//	// Minimal usage — all defaults apply.
+// On first run the key manager creates Config.KeysDir and generates fresh
+// Ed25519 keys and an HMAC refresh secret. On subsequent runs the existing
+// files are loaded and validated.
+//
+// New returns a wrapped ErrInvalidConfig on bad configuration, or a wrapped
+// ErrKeyManager when key initialisation fails. Both are unwrappable with
+// errors.Is.
+//
+//	// Minimal — all defaults apply.
 //	auth, err := authcore.New(authcore.DefaultConfig())
 //
-//	// Custom timezone, logs disabled.
+//	// Custom keys directory (useful in containers or tests).
 //	cfg := authcore.DefaultConfig()
-//	cfg.Timezone = time.UTC
-//	cfg.EnableLogs = false
+//	cfg.KeysDir = "/run/secrets/authcore"
 //	auth, err := authcore.New(cfg)
-//
-// New returns ErrInvalidConfig (or a wrapped sentinel) on bad input.
 func New(cfg Config) (*AuthCore, error) {
 	cfg = applyDefaults(cfg)
 
@@ -53,14 +87,21 @@ func New(cfg Config) (*AuthCore, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 
-	logger := newLogger(cfg)
+	log := newLogger(cfg)
+
+	km, err := keymanager.New(cfg.KeysDir, log)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrKeyManager, err)
+	}
 
 	ac := &AuthCore{
 		config: cfg,
-		log:    logger,
+		log:    log,
+		keys:   km,
 	}
 
-	ac.log.Info("authcore initialised (timezone=%s, logs=%v)", cfg.Timezone, cfg.EnableLogs)
+	ac.log.Info("authcore initialised (timezone=%s, logs=%v, keys=%s)",
+		cfg.Timezone, cfg.EnableLogs, cfg.KeysDir)
 
 	return ac, nil
 }
@@ -72,7 +113,15 @@ func (a *AuthCore) Config() Config {
 }
 
 // Logger returns the active Logger.
-// Sub-modules should use this logger to write to the same sink as the core.
+// Sub-modules must use this logger rather than creating their own so that
+// all output flows through a single, user-configured sink.
 func (a *AuthCore) Logger() Logger {
 	return a.log
+}
+
+// Keys returns the library's managed cryptographic material.
+// Sub-modules use this to obtain the Ed25519 signing key and the HMAC
+// refresh secret without needing direct file-system access.
+func (a *AuthCore) Keys() Keys {
+	return a.keys
 }
