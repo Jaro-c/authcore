@@ -260,12 +260,28 @@ That's it. No config required.
 
 ```go
 hash, err := pwdMod.Hash(userPassword)
+switch {
+case errors.Is(err, password.ErrWeakPassword):
+    // 400 — tell the user exactly what's missing (message is descriptive)
+case err != nil:
+    // 500 — unexpected error
+}
 // Store hash in your database. Never store the plaintext.
 db.StorePasswordHash(userID, hash)
 ```
 
-Each call generates a **fresh random salt**, so two hashes of the same password
-are always different — but both verify correctly.
+`Hash` validates the password **before** spending CPU on hashing:
+
+| Rule | Requirement |
+|---|---|
+| Length | 12 – 64 characters |
+| Uppercase | At least one (`A`–`Z`, Unicode-aware) |
+| Lowercase | At least one (`a`–`z`, Unicode-aware) |
+| Digit | At least one (`0`–`9`) |
+| Special | At least one (anything that is not a letter or digit) |
+
+Each call also generates a **fresh random salt**, so two hashes of the same
+password are always different strings — but both verify correctly.
 
 The stored string is fully self-describing (**PHC format**):
 
@@ -495,6 +511,7 @@ In tests, inject a stub `Provider` that returns fixed keys — no disk I/O requi
 |---|---|
 | `password.ErrInvalidConfig` | `password.Config` validation failed |
 | `password.ErrInvalidHash` | stored hash is malformed or not Argon2id PHC format |
+| `password.ErrWeakPassword` | plaintext does not meet the built-in policy |
 
 Always use `errors.Is` for error inspection — errors may be wrapped:
 

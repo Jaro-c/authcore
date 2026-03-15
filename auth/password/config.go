@@ -30,6 +30,19 @@ type Config struct {
 	// Set this to the minimum number of CPU cores guaranteed to your service.
 	// Defaults to 2. Minimum 1.
 	Parallelism uint8
+
+	// DisablePolicy disables the built-in password policy check inside Hash.
+	//
+	// By default, Hash rejects any password that does not satisfy all of:
+	//   - Between 12 and 64 characters
+	//   - At least one uppercase letter
+	//   - At least one lowercase letter
+	//   - At least one digit
+	//   - At least one special character (anything that is not a letter or digit)
+	//
+	// Set DisablePolicy to true only when you apply your own validation before
+	// calling Hash, or when migrating legacy password hashes.
+	DisablePolicy bool
 }
 
 // DefaultConfig returns a Config with OWASP-recommended Argon2id defaults.

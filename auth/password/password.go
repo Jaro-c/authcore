@@ -21,6 +21,7 @@
 //   - Key length: 32 bytes (256-bit output)
 //   - Output: PHC string format — self-describing, portable
 //   - Comparison: constant-time — immune to timing attacks
+//   - Policy: Hash rejects weak passwords before spending CPU on them
 //
 // # What is tunable
 //
@@ -54,6 +55,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/Jaro-c/authcore"
 	"golang.org/x/crypto/argon2"
@@ -113,16 +115,71 @@ func New(p authcore.Provider, cfg ...Config) (*Password, error) {
 // Name returns the module's unique identifier. It implements authcore.Module.
 func (p *Password) Name() string { return "password" }
 
-// Hash derives an Argon2id hash from plaintext and returns it encoded in PHC
-// string format. A fresh cryptographically random salt is generated per call,
-// so two calls with the same input will produce different (but equivalent) hashes.
+// checkPolicy validates plaintext against the built-in password policy.
+// It runs in O(n) with a single pass and no memory allocations.
+//
+// Rules:
+//   - Length between 12 and 64 characters.
+//   - At least one uppercase letter (Unicode-aware).
+//   - At least one lowercase letter (Unicode-aware).
+//   - At least one digit.
+//   - At least one special character (anything that is not a letter or digit).
+func checkPolicy(plaintext string) error {
+	if len(plaintext) < 12 {
+		return fmt.Errorf("must be at least 12 characters")
+	}
+	if len(plaintext) > 64 {
+		return fmt.Errorf("must be at most 64 characters")
+	}
+
+	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	for _, r := range plaintext {
+		switch {
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+
+	switch {
+	case !hasUpper:
+		return fmt.Errorf("must contain at least one uppercase letter")
+	case !hasLower:
+		return fmt.Errorf("must contain at least one lowercase letter")
+	case !hasDigit:
+		return fmt.Errorf("must contain at least one digit")
+	case !hasSpecial:
+		return fmt.Errorf("must contain at least one special character")
+	}
+	return nil
+}
+
+// Hash validates plaintext against the built-in password policy and, if it
+// passes, derives an Argon2id hash returned in PHC string format. A fresh
+// cryptographically random salt is generated per call, so two calls with the
+// same input produce different (but equivalent) hashes.
+//
+// Policy (enforced by default, disable via Config.DisablePolicy):
+//   - 12–64 characters
+//   - At least one uppercase letter, one lowercase letter, one digit, one special character
 //
 // Store the returned string in your database. Never store the plaintext password.
 //
 //	hash, err := pwdMod.Hash(userPassword)
-//	if err != nil { ... }
+//	if errors.Is(err, password.ErrWeakPassword) { /* tell the user what's wrong */ }
 //	db.StorePasswordHash(userID, hash)
 func (p *Password) Hash(plaintext string) (string, error) {
+	if !p.cfg.DisablePolicy {
+		if err := checkPolicy(plaintext); err != nil {
+			return "", fmt.Errorf("%w: %w", ErrWeakPassword, err)
+		}
+	}
+
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("password: generate salt: %w", err)

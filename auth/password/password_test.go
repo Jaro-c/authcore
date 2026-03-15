@@ -8,6 +8,7 @@ import (
 	"github.com/Jaro-c/authcore"
 )
 
+
 // ---- test infrastructure ----------------------------------------------------
 
 // fakeProvider satisfies authcore.Provider with a silent logger and no keys.
@@ -90,7 +91,7 @@ func TestName(t *testing.T) {
 
 func TestHash_returnsPHCFormat(t *testing.T) {
 	mod := newMod(t)
-	hash, err := mod.Hash("correct-horse-battery-staple")
+	hash, err := mod.Hash("Correct-Horse-9!")
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
@@ -101,11 +102,11 @@ func TestHash_returnsPHCFormat(t *testing.T) {
 
 func TestHash_saltIsRandom(t *testing.T) {
 	mod := newMod(t)
-	h1, err := mod.Hash("same-password")
+	h1, err := mod.Hash("Same-Password9!")
 	if err != nil {
 		t.Fatalf("Hash() first call error = %v", err)
 	}
-	h2, err := mod.Hash("same-password")
+	h2, err := mod.Hash("Same-Password9!")
 	if err != nil {
 		t.Fatalf("Hash() second call error = %v", err)
 	}
@@ -120,7 +121,7 @@ func TestHash_embedsConfigParams(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	hash, err := mod.Hash("password")
+	hash, err := mod.Hash("Correct-Horse-9!")
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
@@ -134,12 +135,12 @@ func TestHash_embedsConfigParams(t *testing.T) {
 
 func TestVerify_correctPassword(t *testing.T) {
 	mod := newMod(t)
-	hash, err := mod.Hash("my-secret-password")
+	hash, err := mod.Hash("My-Secret-Pass9!")
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
 
-	ok, err := mod.Verify("my-secret-password", hash)
+	ok, err := mod.Verify("My-Secret-Pass9!", hash)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -150,12 +151,12 @@ func TestVerify_correctPassword(t *testing.T) {
 
 func TestVerify_wrongPassword(t *testing.T) {
 	mod := newMod(t)
-	hash, err := mod.Hash("my-secret-password")
+	hash, err := mod.Hash("My-Secret-Pass9!")
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
 
-	ok, err := mod.Verify("wrong-password", hash)
+	ok, err := mod.Verify("Wrong-Password9!", hash)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -166,7 +167,7 @@ func TestVerify_wrongPassword(t *testing.T) {
 
 func TestVerify_emptyPasswordDoesNotMatch(t *testing.T) {
 	mod := newMod(t)
-	hash, err := mod.Hash("not-empty")
+	hash, err := mod.Hash("Correct-Horse-9!")
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
@@ -206,7 +207,7 @@ func TestVerify_usesParamsFromStoredHash(t *testing.T) {
 		t.Fatalf("New(lowCost) error = %v", err)
 	}
 
-	hash, err := hashMod.Hash("password")
+	hash, err := hashMod.Hash("Correct-Horse-9!")
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
@@ -214,12 +215,85 @@ func TestVerify_usesParamsFromStoredHash(t *testing.T) {
 	// Verify with a different module config — must still succeed because Verify
 	// reads the parameters from the stored hash, not from the module's Config.
 	verifyMod := newMod(t) // uses DefaultConfig (64 MiB / 3 iterations)
-	ok, err := verifyMod.Verify("password", hash)
+	ok, err := verifyMod.Verify("Correct-Horse-9!", hash)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
 	if !ok {
 		t.Error("Verify() = false; stored hash should be verifiable even when module config differs")
+	}
+}
+
+// ---- Hash() — policy enforcement --------------------------------------------
+
+func TestHash_weakPasswordReturnsErrWeakPassword(t *testing.T) {
+	mod := newMod(t)
+
+	cases := []struct {
+		name string
+		pwd  string
+	}{
+		{"too short", "Aa1!"},
+		{"too long", "Aa1!" + strings.Repeat("x", 61)},
+		{"no uppercase", "lowercase1!aaa"},
+		{"no lowercase", "UPPERCASE1!AAA"},
+		{"no digit", "NoDigitHere!!!"},
+		{"no special", "NoSpecial1Abcde"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := mod.Hash(tc.pwd)
+			if !errors.Is(err, ErrWeakPassword) {
+				t.Errorf("Hash(%q) error = %v, want ErrWeakPassword", tc.pwd, err)
+			}
+		})
+	}
+}
+
+func TestHash_strongPasswordSucceeds(t *testing.T) {
+	mod := newMod(t)
+	_, err := mod.Hash("Correct-Horse-9!")
+	if err != nil {
+		t.Errorf("Hash(strong password) error = %v, want nil", err)
+	}
+}
+
+func TestHash_policyDisabledAllowsWeakPassword(t *testing.T) {
+	mod, err := New(fakeProvider{}, Config{DisablePolicy: true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	// "weak" would normally fail the policy check.
+	_, err = mod.Hash("weak")
+	if err != nil {
+		t.Errorf("Hash(weak) with DisablePolicy=true error = %v, want nil", err)
+	}
+}
+
+// ---- checkPolicy() ----------------------------------------------------------
+
+func TestCheckPolicy_boundaryLengths(t *testing.T) {
+	base := "Aa1!" // 4-char valid seed — pad to reach target length
+
+	exactly12 := base + strings.Repeat("a", 8)
+	if err := checkPolicy(exactly12); err != nil {
+		t.Errorf("12-char password rejected: %v", err)
+	}
+
+	exactly64 := base + strings.Repeat("a", 60)
+	if err := checkPolicy(exactly64); err != nil {
+		t.Errorf("64-char password rejected: %v", err)
+	}
+
+	tooShort := base + strings.Repeat("a", 7) // 11 chars
+	if checkPolicy(tooShort) == nil {
+		t.Error("11-char password should be rejected")
+	}
+
+	tooLong := base + strings.Repeat("a", 61) // 65 chars
+	if checkPolicy(tooLong) == nil {
+		t.Error("65-char password should be rejected")
 	}
 }
 
