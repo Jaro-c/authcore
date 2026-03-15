@@ -1,45 +1,50 @@
 // Package password provides Argon2id password hashing for authcore.
 //
-// Argon2id is the memory-hard algorithm recommended by OWASP for password
-// storage. It is resistant to GPU and ASIC brute-force attacks because it
-// requires both significant CPU time and large amounts of RAM per attempt.
+// # Why Argon2id?
 //
-// # What is standardised
+// Argon2id is the algorithm recommended by OWASP and RFC 9106 for password
+// storage. Unlike bcrypt, it is memory-hard: an attacker must allocate large
+// amounts of RAM per attempt, making GPU and ASIC brute-force attacks
+// prohibitively expensive.
 //
-// The following parameters are fixed and cannot be changed — they represent
-// security minimums that should not be weakened:
+// # Zero-config setup
 //
-//   - Algorithm: Argon2id (RFC 9106)
-//   - Salt length: 16 bytes (128 bits of cryptographically random material)
-//   - Key length: 32 bytes (256-bit derived key)
-//   - Output format: PHC string (portable, self-describing)
+// The OWASP-recommended defaults work out of the box — no configuration needed:
 //
-// # What is configurable
-//
-// The work parameters (Memory, Iterations, Parallelism) can be tuned to match
-// your hardware. Higher values are always more secure; the defaults are sized
-// for a server with 2+ vCPUs and 4+ GiB of RAM.
-//
-// # Typical server-side flow
-//
-//	// 1. Initialise once at startup.
 //	auth, _   := authcore.New(authcore.DefaultConfig())
-//	pwdMod, _ := password.New(auth, password.DefaultConfig())
+//	pwdMod, _ := password.New(auth) // ← that's it
 //
-//	// 2. Registration — hash the user's chosen password.
+// # What is fixed (security guarantees you get for free)
+//
+//   - Algorithm: Argon2id (RFC 9106) — always
+//   - Salt: 16 random bytes per hash — via crypto/rand
+//   - Key length: 32 bytes (256-bit output)
+//   - Output: PHC string format — self-describing, portable
+//   - Comparison: constant-time — immune to timing attacks
+//
+// # What is tunable
+//
+// Memory, Iterations, and Parallelism can be increased to match your hardware.
+// The algorithm and output format are never configurable — that's the point.
+//
+// # Full usage
+//
+//	// Startup — one instance, shared across all goroutines.
+//	auth, _   := authcore.New(authcore.DefaultConfig())
+//	pwdMod, _ := password.New(auth)
+//
+//	// Registration — hash and store. Never store the plaintext.
 //	hash, err := pwdMod.Hash(userPassword)
-//	if err != nil { ... }
-//	db.StorePasswordHash(userID, hash)  // store the PHC string, never the plaintext
+//	db.StorePasswordHash(userID, hash)
 //
-//	// 3. Login — verify the submitted password against the stored hash.
+//	// Login — verify in constant time.
 //	ok, err := pwdMod.Verify(submittedPassword, storedHash)
-//	if err != nil { ... }               // ErrInvalidHash — hash is malformed
 //	if !ok { return http.StatusUnauthorized }
 //
-//	// 4. Password change — verify current password first, then hash the new one.
-//	ok, err := pwdMod.Verify(currentPassword, storedHash)
+//	// Password change — verify first, then hash the new one.
+//	ok, _ = pwdMod.Verify(currentPassword, storedHash)
 //	if !ok { return http.StatusUnauthorized }
-//	newHash, err := pwdMod.Hash(newPassword)
+//	newHash, _ := pwdMod.Hash(newPassword)
 //	db.UpdatePasswordHash(userID, newHash)
 package password
 
@@ -73,19 +78,34 @@ type Password struct {
 
 // New creates and returns a Password module.
 //
-// p provides the logger sourced from the parent AuthCore instance.
-// cfg controls the Argon2id work parameters; start from DefaultConfig.
-func New(p authcore.Provider, cfg Config) (*Password, error) {
-	cfg = applyDefaults(cfg)
+// cfg is optional — omit it to use the OWASP-recommended defaults
+// (Argon2id, 64 MiB, 3 iterations, 2 threads). Pass a Config only when
+// you need to tune the work parameters for your hardware:
+//
+//	// zero-config — safe defaults, no boilerplate
+//	pwdMod, err := password.New(auth)
+//
+//	// custom work factor for a more powerful server
+//	pwdMod, err := password.New(auth, password.Config{
+//	    Memory:      128 * 1024,
+//	    Iterations:  4,
+//	    Parallelism: 4,
+//	})
+func New(p authcore.Provider, cfg ...Config) (*Password, error) {
+	var resolved Config
+	if len(cfg) > 0 {
+		resolved = cfg[0]
+	}
+	resolved = applyDefaults(resolved)
 
-	if err := validateConfig(cfg); err != nil {
+	if err := validateConfig(resolved); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 
-	pw := &Password{cfg: cfg, log: p.Logger()}
+	pw := &Password{cfg: resolved, log: p.Logger()}
 
 	pw.log.Info("password: module initialised (memory=%dKiB, iterations=%d, parallelism=%d)",
-		cfg.Memory, cfg.Iterations, cfg.Parallelism)
+		resolved.Memory, resolved.Iterations, resolved.Parallelism)
 
 	return pw, nil
 }
