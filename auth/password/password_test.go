@@ -297,6 +297,22 @@ func TestCheckPolicy_boundaryLengths(t *testing.T) {
 	}
 }
 
+// ---- ValidatePolicy() -------------------------------------------------------
+
+func TestValidatePolicy_validPassword(t *testing.T) {
+	p, _ := New(fakeProvider{})
+	if err := p.ValidatePolicy("Correct-Horse-9!"); err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+}
+
+func TestValidatePolicy_weakPassword(t *testing.T) {
+	p, _ := New(fakeProvider{})
+	if err := p.ValidatePolicy("weak"); err == nil {
+		t.Error("expected error for weak password, got nil")
+	}
+}
+
 // ---- parsePHC() -------------------------------------------------------------
 
 func TestParsePHC_wrongSegmentCount(t *testing.T) {

@@ -70,6 +70,17 @@ version bump.
 
 ---
 
+## [1.1.1] - 2026-03-15
+
+### Added
+
+#### Password (`auth/password`)
+- `(*Password).ValidatePolicy(plaintext string) error` — exposes the built-in
+  policy check as a public method for fail-fast validation in HTTP handlers,
+  before spending CPU on Argon2id.
+
+---
+
 ## [1.1.0] - 2026-03-14
 
 ### Added
