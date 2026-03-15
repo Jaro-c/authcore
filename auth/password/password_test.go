@@ -26,16 +26,23 @@ func (silentLogger) Error(string, ...any) {}
 
 func newMod(t *testing.T) *Password {
 	t.Helper()
-	mod, err := New(fakeProvider{}, DefaultConfig())
+	mod, err := New(fakeProvider{})
 	if err != nil {
-		t.Fatalf("New(DefaultConfig) error = %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 	return mod
 }
 
 // ---- New() ------------------------------------------------------------------
 
-func TestNew_defaultConfigSucceeds(t *testing.T) {
+func TestNew_noArgsUsesDefaults(t *testing.T) {
+	_, err := New(fakeProvider{})
+	if err != nil {
+		t.Fatalf("New() with no config error = %v", err)
+	}
+}
+
+func TestNew_explicitConfigSucceeds(t *testing.T) {
 	_, err := New(fakeProvider{}, DefaultConfig())
 	if err != nil {
 		t.Fatalf("New(DefaultConfig) error = %v", err)
@@ -50,28 +57,21 @@ func TestNew_zeroConfigSucceedsBecauseDefaultsAreApplied(t *testing.T) {
 }
 
 func TestNew_tooLowMemoryReturnsErrInvalidConfig(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Memory = 1024 // below 8 MiB minimum
-
-	_, err := New(fakeProvider{}, cfg)
+	_, err := New(fakeProvider{}, Config{Memory: 1024}) // below 8 MiB minimum
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("expected ErrInvalidConfig, got %v", err)
 	}
 }
 
 func TestNew_zeroIterationsAreFilledByDefaults(t *testing.T) {
-	cfg := Config{Memory: DefaultConfig().Memory, Parallelism: 2}
-	// Iterations == 0 → applyDefaults fills it → no error
-	_, err := New(fakeProvider{}, cfg)
+	_, err := New(fakeProvider{}, Config{Memory: DefaultConfig().Memory, Parallelism: 2})
 	if err != nil {
 		t.Fatalf("expected nil error when Iterations=0, got %v", err)
 	}
 }
 
 func TestNew_zeroParallelismIsFilledByDefaults(t *testing.T) {
-	cfg := Config{Memory: DefaultConfig().Memory, Iterations: 1}
-	// Parallelism == 0 → applyDefaults fills it → no error
-	_, err := New(fakeProvider{}, cfg)
+	_, err := New(fakeProvider{}, Config{Memory: DefaultConfig().Memory, Iterations: 1})
 	if err != nil {
 		t.Fatalf("expected nil error when Parallelism=0, got %v", err)
 	}
@@ -115,12 +115,7 @@ func TestHash_saltIsRandom(t *testing.T) {
 }
 
 func TestHash_embedsConfigParams(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Memory = 16 * 1024
-	cfg.Iterations = 2
-	cfg.Parallelism = 1
-
-	mod, err := New(fakeProvider{}, cfg)
+	mod, err := New(fakeProvider{}, Config{Memory: 16 * 1024, Iterations: 2, Parallelism: 1})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -206,8 +201,7 @@ func TestVerify_wrongAlgorithmReturnsErrInvalidHash(t *testing.T) {
 
 func TestVerify_usesParamsFromStoredHash(t *testing.T) {
 	// Hash with low-cost config (fast for tests).
-	lowCost := Config{Memory: 8 * 1024, Iterations: 1, Parallelism: 1}
-	hashMod, err := New(fakeProvider{}, lowCost)
+	hashMod, err := New(fakeProvider{}, Config{Memory: 8 * 1024, Iterations: 1, Parallelism: 1})
 	if err != nil {
 		t.Fatalf("New(lowCost) error = %v", err)
 	}

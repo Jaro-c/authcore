@@ -68,6 +68,7 @@ import (
 
     "github.com/Jaro-c/authcore"
     "github.com/Jaro-c/authcore/auth/jwt"
+    "github.com/Jaro-c/authcore/auth/password"
 )
 
 type UserClaims struct {
@@ -76,27 +77,38 @@ type UserClaims struct {
 }
 
 func main() {
-    // 1. Initialise the library once at startup.
+    // 1. One-time setup at startup.
     auth, err := authcore.New(authcore.DefaultConfig())
     if err != nil {
         log.Fatal(err)
     }
 
-    // 2. Create the JWT module with your custom claims type.
+    // 2. Password hashing — zero config, secure defaults.
+    pwdMod, err := password.New(auth)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // 3. JWT tokens — configure issuer/audience for your service.
     jwtMod, err := jwt.New[UserClaims](auth, jwt.DefaultConfig())
     if err != nil {
         log.Fatal(err)
     }
 
-    // 3. Issue a token pair on login.
-    pair, err := jwtMod.CreateTokens(userID, UserClaims{Name: "Ana", Role: "admin"})
-    if err != nil {
-        log.Fatal(err)
+    // Registration: hash and store — never store the plaintext.
+    hash, _ := pwdMod.Hash("user-chosen-password")
+    _ = hash // → db.StorePasswordHash(userID, hash)
+
+    // Login: verify password, then issue a token pair.
+    ok, _ := pwdMod.Verify("user-submitted-password", hash)
+    if !ok {
+        log.Fatal("wrong password")
     }
 
-    // Send pair.AccessToken  → Authorization: Bearer header
-    // Send pair.RefreshToken → secure httpOnly cookie
-    // Store pair.RefreshTokenHash in your database (never the raw token)
+    pair, _ := jwtMod.CreateTokens(userID, UserClaims{Name: "Ana", Role: "admin"})
+    // pair.AccessToken      → Authorization: Bearer header
+    // pair.RefreshToken     → secure httpOnly cookie
+    // pair.RefreshTokenHash → store in your database (never the raw token)
     _ = pair
 }
 ```
@@ -225,27 +237,22 @@ Keep it small — large values reduce the security margin of short-lived tokens.
 
 ## Password Hashing
 
+No boilerplate. No algorithm choices. Just secure password hashing that works.
+
 ### Setup
 
 ```go
 auth, err := authcore.New(authcore.DefaultConfig())
-if err != nil {
-    log.Fatal(err)
-}
 
-pwdMod, err := password.New(auth, password.DefaultConfig())
-if err != nil {
-    log.Fatal(err)
-}
+// Zero-config — OWASP-recommended Argon2id defaults applied automatically.
+pwdMod, err := password.New(auth)
 ```
 
-`password.DefaultConfig()` values (OWASP Argon2id recommendations):
+That's it. No config required.
 
-| Field | Default | Notes |
-|---|---|---|
-| `Memory` | `65536` (64 MiB) | KiB allocated per hash |
-| `Iterations` | `3` | Passes over memory |
-| `Parallelism` | `2` | Threads; match guaranteed CPU cores |
+> **Why Argon2id?** It's memory-hard: an attacker must allocate ~64 MiB of RAM
+> *per attempt*, making GPU and ASIC brute-force attacks prohibitively expensive.
+> bcrypt does not have this property.
 
 ---
 
@@ -253,24 +260,18 @@ if err != nil {
 
 ```go
 hash, err := pwdMod.Hash(userPassword)
-if err != nil {
-    log.Fatal(err)
-}
-// Store hash in your database — never store the plaintext.
+// Store hash in your database. Never store the plaintext.
 db.StorePasswordHash(userID, hash)
 ```
 
-Each call generates a fresh random salt, so two hashes of the same password
-are different strings but both verify correctly.
+Each call generates a **fresh random salt**, so two hashes of the same password
+are always different — but both verify correctly.
 
-The returned string is a self-describing **PHC format** value:
+The stored string is fully self-describing (**PHC format**):
 
 ```
 $argon2id$v=19$m=65536,t=3,p=2$<base64-salt>$<base64-hash>
 ```
-
-All Argon2id parameters are embedded in the string, so stored hashes remain
-valid even if you tune the work parameters later.
 
 ---
 
@@ -280,37 +281,39 @@ valid even if you tune the work parameters later.
 ok, err := pwdMod.Verify(submittedPassword, storedHash)
 switch {
 case errors.Is(err, password.ErrInvalidHash):
-    // 500 — hash stored in the database is malformed
-case err != nil:
-    // 500 — unexpected error
+    // 500 — hash in the database is malformed
 case !ok:
     // 401 — wrong password
 }
 ```
 
-The comparison is performed in **constant time** (`crypto/subtle`) to prevent
-timing attacks. Parameters are always read from `storedHash`, not from the
-module's current `Config`.
+Comparison is **constant-time** (`crypto/subtle`) — timing attacks are not
+possible. Parameters are always read from the stored hash, never from the
+current module config.
 
 ---
 
-### Tuning work parameters
+### Tuning work parameters (optional)
 
-Increase the work factor on more capable hardware to keep hashing time around
-200–500 ms per operation:
+The defaults are sized for 2 vCPUs / 4 GiB RAM. On more powerful hardware,
+crank them up — a hash should take roughly 200–500 ms:
 
 ```go
-cfg := password.DefaultConfig()
-cfg.Memory      = 128 * 1024  // 128 MiB — for a dedicated auth server
-cfg.Iterations  = 4
-cfg.Parallelism = 4           // match your guaranteed CPU core count
-
-pwdMod, err := password.New(auth, cfg)
+pwdMod, err := password.New(auth, password.Config{
+    Memory:      128 * 1024, // 128 MiB
+    Iterations:  4,
+    Parallelism: 4,          // match your guaranteed CPU core count
+})
 ```
 
-> **Old hashes stay valid.** Parameters are stored inside the hash string.
-> Changing `Config` only affects newly created hashes — existing users are
-> verified against the parameters that were active when their hash was created.
+| Field | Default | Minimum |
+|---|---|---|
+| `Memory` | `65536` (64 MiB) | `8192` (8 MiB) |
+| `Iterations` | `3` | `1` |
+| `Parallelism` | `2` | `1` |
+
+> **Old hashes stay valid.** All parameters live inside the hash string itself.
+> Changing the config only affects *new* hashes — existing users keep working.
 
 ---
 
