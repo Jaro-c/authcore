@@ -115,6 +115,19 @@ func New(p authcore.Provider, cfg ...Config) (*Password, error) {
 // Name returns the module's unique identifier. It implements authcore.Module.
 func (p *Password) Name() string { return "password" }
 
+// ValidatePolicy reports whether plaintext satisfies the built-in password policy.
+// Use this for fail-fast validation before calling Hash — for example, in an HTTP
+// handler to return a 400 before spending CPU on Argon2id.
+//
+// Returns nil if the password is acceptable, or a descriptive [ErrWeakPassword]
+// wrapping the specific rule that was violated.
+//
+// This check is identical to the one Hash performs internally unless DisablePolicy
+// is set to true in the module config.
+func (p *Password) ValidatePolicy(plaintext string) error {
+	return checkPolicy(plaintext)
+}
+
 // checkPolicy validates plaintext against the built-in password policy.
 // It runs in O(n) with a single pass and no memory allocations.
 //
