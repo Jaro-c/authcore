@@ -63,6 +63,7 @@ type Provider interface {
 //
 //	auth/jwt      — JSON Web Token authentication (EdDSA / Ed25519)
 //	auth/password — Argon2id password hashing
+//	auth/email    — email validation and normalization
 //
 // Module constructors follow the convention:
 //

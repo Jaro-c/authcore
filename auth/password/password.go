@@ -131,7 +131,7 @@ func (p *Password) Name() string { return "password" }
 // is set to true in the module config.
 func (p *Password) ValidatePolicy(plaintext string) error {
 	if err := checkPolicy(plaintext); err != nil {
-		return fmt.Errorf("%w: %w", ErrWeakPassword, err)
+		return &policyViolation{reason: err}
 	}
 	return nil
 }
@@ -197,7 +197,7 @@ func checkPolicy(plaintext string) error {
 func (p *Password) Hash(plaintext string) (string, error) {
 	if !p.cfg.DisablePolicy {
 		if err := checkPolicy(plaintext); err != nil {
-			return "", fmt.Errorf("%w: %w", ErrWeakPassword, err)
+			return "", &policyViolation{reason: err}
 		}
 	}
 

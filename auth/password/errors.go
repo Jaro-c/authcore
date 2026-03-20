@@ -47,3 +47,13 @@ var (
 	// "password: does not meet policy requirements: " prefix.
 	ErrWeakPassword = errors.New("password: does not meet policy requirements")
 )
+
+// policyViolation wraps ErrWeakPassword with a single specific reason so that
+// both errors.Is(err, ErrWeakPassword) and errors.Unwrap(err) work correctly.
+// Using fmt.Errorf("%w: %w", ...) would create a multi-unwrap error in Go 1.20+
+// where errors.Unwrap returns nil, breaking the errors.Unwrap(err).Error() pattern.
+type policyViolation struct{ reason error }
+
+func (v *policyViolation) Error() string   { return ErrWeakPassword.Error() + ": " + v.reason.Error() }
+func (v *policyViolation) Is(t error) bool { return t == ErrWeakPassword }
+func (v *policyViolation) Unwrap() error   { return v.reason }
