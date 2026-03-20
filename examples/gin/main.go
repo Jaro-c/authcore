@@ -81,14 +81,18 @@ func main() {
 		}
 
 		// Fail-fast: reject weak passwords before spending CPU on Argon2id.
+		// ErrWeakPassword is CLIENT-SAFE: unwrap to get the specific reason
+		// ("must be at least 12 characters") without the module prefix.
 		if err := pwdMod.ValidatePolicy(req.Password); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": errors.Unwrap(err).Error()})
 			return
 		}
 
 		hash, err := pwdMod.Hash(req.Password)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not hash password"})
+			// ErrInvalidHash and salt errors are INTERNAL — log, return generic 500.
+			log.Printf("hash error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 			return
 		}
 
@@ -127,14 +131,22 @@ func main() {
 		}
 
 		ok, err := pwdMod.Verify(req.Password, u.passwordHash)
-		if err != nil || !ok {
+		if err != nil {
+			// ErrInvalidHash is INTERNAL — log it, return generic 401.
+			log.Printf("verify error for %s: %v", req.Email, err)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+			return
+		}
+		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 			return
 		}
 
 		pair, err := jwtMod.CreateTokens(u.id, UserClaims{Email: u.email})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not issue tokens"})
+			// INTERNAL: sign error or invalid subject — log it, return generic 500.
+			log.Printf("create tokens error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 			return
 		}
 
@@ -164,11 +176,17 @@ func main() {
 
 		claims, err := jwtMod.VerifyAccessToken(token)
 		if err != nil {
+			// Always log the full error — it may contain internal details useful
+			// for debugging (algorithm name, token type mismatch, etc.).
+			log.Printf("access token verification failed: %v", err)
+
+			// Only ErrTokenExpired is CLIENT-SAFE — it tells the client to refresh.
+			// All other errors collapse to a generic "unauthorized".
 			if errors.Is(err, jwt.ErrTokenExpired) {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token expired"})
 				return
 			}
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
 

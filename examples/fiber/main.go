@@ -79,13 +79,19 @@ func main() {
 		}
 
 		// Fail-fast: reject weak passwords before spending CPU on Argon2id.
+		// ErrWeakPassword is CLIENT-SAFE: unwrap to get the specific reason
+		// ("must be at least 12 characters") without the module prefix.
 		if err := pwdMod.ValidatePolicy(req.Password); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": errors.Unwrap(err).Error(),
+			})
 		}
 
 		hash, err := pwdMod.Hash(req.Password)
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not hash password"})
+			// ErrInvalidHash and salt errors are INTERNAL — log, return generic 500.
+			log.Printf("hash error: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
 		}
 
 		mu.Lock()
@@ -121,13 +127,20 @@ func main() {
 		}
 
 		ok, err := pwdMod.Verify(req.Password, u.passwordHash)
-		if err != nil || !ok {
+		if err != nil {
+			// ErrInvalidHash is INTERNAL — log it, return generic 401.
+			log.Printf("verify error for %s: %v", req.Email, err)
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
+		}
+		if !ok {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
 		}
 
 		pair, err := jwtMod.CreateTokens(u.id, UserClaims{Email: u.email})
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not issue tokens"})
+			// INTERNAL: sign error or invalid subject — log it, return generic 500.
+			log.Printf("create tokens error: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "internal server error"})
 		}
 
 		// Persist only the hash — never the raw refresh token.
@@ -155,10 +168,16 @@ func main() {
 
 		claims, err := jwtMod.VerifyAccessToken(token)
 		if err != nil {
+			// Always log the full error — it may contain internal details useful
+			// for debugging (algorithm name, token type mismatch, etc.).
+			log.Printf("access token verification failed: %v", err)
+
+			// Only ErrTokenExpired is CLIENT-SAFE — it tells the client to refresh.
+			// All other errors collapse to a generic "unauthorized".
 			if errors.Is(err, jwt.ErrTokenExpired) {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "token expired"})
 			}
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
 		}
 
 		return c.JSON(fiber.Map{

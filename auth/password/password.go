@@ -119,13 +119,21 @@ func (p *Password) Name() string { return "password" }
 // Use this for fail-fast validation before calling Hash — for example, in an HTTP
 // handler to return a 400 before spending CPU on Argon2id.
 //
-// Returns nil if the password is acceptable, or a descriptive [ErrWeakPassword]
-// wrapping the specific rule that was violated.
+// Returns nil if the password is acceptable, or [ErrWeakPassword] wrapping the
+// specific rule that was violated. The wrapped reason is safe to show the user:
+//
+//	if err := pwdMod.ValidatePolicy(req.Password); err != nil {
+//	    reason := errors.Unwrap(err).Error() // "must be at least 12 characters"
+//	    c.JSON(400, gin.H{"error": reason})
+//	}
 //
 // This check is identical to the one Hash performs internally unless DisablePolicy
 // is set to true in the module config.
 func (p *Password) ValidatePolicy(plaintext string) error {
-	return checkPolicy(plaintext)
+	if err := checkPolicy(plaintext); err != nil {
+		return fmt.Errorf("%w: %w", ErrWeakPassword, err)
+	}
+	return nil
 }
 
 // checkPolicy validates plaintext against the built-in password policy.
