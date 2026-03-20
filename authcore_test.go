@@ -30,13 +30,15 @@ func TestNew_emptyConfigSucceedsBecauseDefaultsAreApplied(t *testing.T) {
 	}
 }
 
-func TestNew_badKeysDirReturnsErrKeyManager(t *testing.T) {
+func TestNew_badKeysDirReturnsErrInvalidConfig(t *testing.T) {
 	cfg := authcore.DefaultConfig()
 	cfg.KeysDir = string([]byte{0}) // null byte makes every OS reject the path
 
+	// validateConfig now checks writability early, so a bad KeysDir is caught
+	// as ErrInvalidConfig rather than ErrKeyManager.
 	_, err := authcore.New(cfg)
-	if !errors.Is(err, authcore.ErrKeyManager) {
-		t.Errorf("expected ErrKeyManager, got %v", err)
+	if !errors.Is(err, authcore.ErrInvalidConfig) {
+		t.Errorf("expected ErrInvalidConfig, got %v", err)
 	}
 }
 

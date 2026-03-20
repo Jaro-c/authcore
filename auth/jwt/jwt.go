@@ -4,17 +4,46 @@ import (
 	"crypto/ed25519"
 	"crypto/subtle"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/Jaro-c/authcore"
 	"github.com/Jaro-c/authcore/internal/clock"
 )
 
-// uuidRe matches UUID v7 in canonical form (case-insensitive via ToLower).
-// Position 14 (version digit) must be 7 (RFC 9562 §5.7).
-// Position 19 (variant byte) must be 8, 9, a, or b (RFC 4122 variant).
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+// isUUIDv7 reports whether s is a valid UUID v7 string (RFC 9562 §5.7).
+// Accepts both upper and lower case — no prior normalization is required,
+// removing the implicit dependency on strings.ToLower being called upstream.
+//
+// UUID canonical form: xxxxxxxx-xxxx-7xxx-[89ab]xxx-xxxxxxxxxxxx (36 chars).
+func isUUIDv7(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return false
+	}
+	// Position 14: version digit must be '7'.
+	if s[14] != '7' {
+		return false
+	}
+	// Position 19: variant bits must be 8, 9, a, or b (case-insensitive).
+	switch s[19] {
+	case '8', '9', 'a', 'b', 'A', 'B':
+	default:
+		return false
+	}
+	// All other positions must be hex digits.
+	for i := 0; i < 36; i++ {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
 
 // Compile-time assertion: *JWT[struct{}] must satisfy authcore.Module.
 var _ authcore.Module = (*JWT[struct{}])(nil)
@@ -97,7 +126,7 @@ func (j *JWT[T]) Name() string { return "jwt" }
 // The library does not persist any of these values.
 func (j *JWT[T]) CreateTokens(subject string, extra T) (*TokenPair, error) {
 	subject = strings.ToLower(subject)
-	if !uuidRe.MatchString(subject) {
+	if !isUUIDv7(subject) {
 		return nil, ErrInvalidSubject
 	}
 

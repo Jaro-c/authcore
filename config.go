@@ -1,6 +1,10 @@
 package authcore
 
-import "time"
+import (
+	"fmt"
+	"os"
+	"time"
+)
 
 // Config holds the top-level configuration for an AuthCore instance.
 // Zero values are replaced by safe defaults via DefaultConfig or applyDefaults.
@@ -69,5 +73,24 @@ func validateConfig(cfg Config) error {
 	if cfg.Timezone == nil {
 		return ErrInvalidTimezone
 	}
+	if err := validateKeysDir(cfg.KeysDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateKeysDir ensures KeysDir can be created and written to.
+// Catching this early gives a clear error before the key manager tries to
+// generate or load key files.
+func validateKeysDir(dir string) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("cannot create keys directory %q: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".authcore-write-check-*")
+	if err != nil {
+		return fmt.Errorf("keys directory %q is not writable: %w", dir, err)
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
 	return nil
 }

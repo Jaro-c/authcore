@@ -102,7 +102,9 @@ func validate(address string) error {
 	}
 
 	// Reject display names like "Ana García <ana@example.com>".
-	// We expect a bare address only.
+	// EqualFold is intentional: net/mail may normalize domain case, so a
+	// direct == would reject valid addresses when Validate is called without
+	// prior normalization (e.g. "User@EXAMPLE.COM" vs "User@example.com").
 	if !strings.EqualFold(address, parsed.Address) {
 		return &emailViolation{reason: fmt.Errorf("invalid format")}
 	}
