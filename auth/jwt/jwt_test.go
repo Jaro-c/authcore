@@ -751,6 +751,20 @@ func TestRotateTokens_newHashMatchesHashRefreshToken(t *testing.T) {
 	}
 }
 
+func TestRotateTokens_preservesSessionID(t *testing.T) {
+	j := newTestJWT[struct{}](t, newFakeProvider(t), DefaultConfig())
+	original, _ := j.CreateTokens(testSubject, struct{}{})
+
+	j.clock = clock.Fixed(epoch.Add(time.Second))
+	rotated, err := j.RotateTokens(original.RefreshToken, struct{}{})
+	if err != nil {
+		t.Fatalf("RotateTokens() error = %v", err)
+	}
+	if rotated.SessionID != original.SessionID {
+		t.Errorf("SessionID changed after rotation: got %q, want %q", rotated.SessionID, original.SessionID)
+	}
+}
+
 // ---- VerifyRefreshTokenHash() -----------------------------------------------
 
 func TestVerifyRefreshTokenHash_matchesStoredHash(t *testing.T) {

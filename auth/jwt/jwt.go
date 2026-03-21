@@ -130,13 +130,19 @@ func (j *JWT[T]) CreateTokens(subject string, extra T) (*TokenPair, error) {
 		return nil, ErrInvalidSubject
 	}
 
-	now := j.clock.Now()
-
-	// Both tokens share the same JTI — it identifies the session.
-	jti, err := generateJTI(now)
+	jti, err := generateJTI(j.clock.Now())
 	if err != nil {
 		return nil, err
 	}
+
+	return j.issueTokens(subject, jti, extra)
+}
+
+// issueTokens signs a new access+refresh pair for subject using the provided jti.
+// CreateTokens generates a fresh jti; RotateTokens reuses the existing session jti
+// so that SessionID remains stable for the lifetime of the session.
+func (j *JWT[T]) issueTokens(subject, jti string, extra T) (*TokenPair, error) {
+	now := j.clock.Now()
 
 	// ----- Access token -----
 	accessToken, err := signToken(newAccessClaims(j.cfg.Issuer, subject, jti, j.cfg.Audience, extra, now, j.cfg.AccessTokenTTL), j.priv, j.kid)
@@ -150,7 +156,7 @@ func (j *JWT[T]) CreateTokens(subject string, extra T) (*TokenPair, error) {
 		return nil, fmt.Errorf("sign refresh token: %w", err)
 	}
 
-	j.log.Debug("jwt: token pair created (sub=%s, jti=%s)", subject, jti)
+	j.log.Debug("jwt: token pair issued (sub=%s, jti=%s)", subject, jti)
 
 	return &TokenPair{
 		AccessToken:           accessToken,
@@ -223,6 +229,10 @@ func (j *JWT[T]) VerifyRefreshTokenHash(token, storedHash string) bool {
 // caller must supply updated extra claims (typically re-fetched from the
 // database at rotation time).
 //
+// The SessionID (jti) is preserved across rotations — only the token strings
+// and their expiry times change. This means the caller's session record
+// primary key remains stable for the entire session lifetime.
+//
 // After a successful rotation, the old refresh token MUST be considered
 // invalid. The application must replace the stored hash atomically:
 //
@@ -242,7 +252,7 @@ func (j *JWT[T]) RotateTokens(refreshToken string, extra T) (*TokenPair, error) 
 		return nil, ErrWrongTokenType
 	}
 
-	j.log.Debug("jwt: rotating token (sub=%s, old_jti=%s)", c.Subject, c.ID)
+	j.log.Debug("jwt: rotating token (sub=%s, jti=%s)", c.Subject, c.ID)
 
-	return j.CreateTokens(c.Subject, extra)
+	return j.issueTokens(c.Subject, c.ID, extra)
 }
