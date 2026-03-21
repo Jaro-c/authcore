@@ -30,6 +30,10 @@ go get github.com/Jaro-c/authcore
   - [Hashing a password](#hashing-a-password)
   - [Verifying a password](#verifying-a-password)
   - [Tuning work parameters](#tuning-work-parameters)
+- [Email Validation](#email-validation)
+  - [Setup](#setup-2)
+  - [Validating and normalizing](#validating-and-normalizing)
+  - [Verifying a domain can receive email](#verifying-a-domain-can-receive-email)
 - [Key Management](#key-management)
 - [Configuration](#configuration)
 - [Custom Logger](#custom-logger)
@@ -48,13 +52,14 @@ go get github.com/Jaro-c/authcore
 - **EdDSA / Ed25519 token signing** — fast, constant-time, no padding-oracle risk
 - **Dual-token model** — short-lived access tokens + long-lived refresh tokens
 - **Argon2id password hashing** — memory-hard, GPU/ASIC-resistant, PHC format
+- **Email validation & normalization** — RFC 5321/5322 compliance, optional DNS MX verification with cache
 - **Automatic key management** — generates, persists, and loads keys on first run
 - **Generic custom claims** — embed any struct in access tokens with full type safety
 - **Timing-safe comparisons** — `subtle.ConstantTimeCompare` throughout
 - **Clock skew tolerance** — configurable leeway for distributed deployments
 - **Pluggable logger** — bring slog, zap, zerolog, or any custom backend
 - **Testable by design** — injectable clock and `Provider` interface for unit tests
-- **Minimal dependencies** — `golang-jwt/jwt/v5` and `golang.org/x/crypto`
+- **Minimal dependencies** — `golang-jwt/jwt/v5`, `golang.org/x/crypto`, `golang.org/x/sync`
 
 ---
 
@@ -333,6 +338,86 @@ pwdMod, err := password.New(auth, password.Config{
 
 ---
 
+## Email Validation
+
+### Setup
+
+```go
+emailMod, err := email.New(auth)
+if err != nil {
+    log.Fatal(err)
+}
+defer emailMod.Close() // stops the background cache eviction goroutine
+```
+
+---
+
+### Validating and normalizing
+
+Always call `ValidateAndNormalize` instead of validating and normalizing separately.
+It lowercases, trims whitespace, and validates in a single call — ensuring the value
+you store is always in canonical form:
+
+```go
+normalized, err := emailMod.ValidateAndNormalize(req.Email)
+switch {
+case errors.Is(err, email.ErrInvalidEmail):
+    // 400 — tell the user exactly what failed (message is descriptive)
+    c.JSON(400, map[string]string{"error": errors.Unwrap(err).Error()})
+    return
+case err != nil:
+    // 500 — unexpected error
+}
+// Store normalized — always lowercase, trimmed.
+db.StoreUser(normalized, ...)
+```
+
+Validation rules (RFC 5321 / RFC 5322):
+
+| Rule | Requirement |
+|---|---|
+| Total length | 1 – 254 characters |
+| Format | One `@` separating a non-empty local part and domain |
+| Local part | ≤ 64 characters |
+| Domain | At least one dot; no leading, trailing, or consecutive dots |
+| Domain labels | 1 – 63 characters each |
+
+> **Always normalize before storing and before querying.** This ensures consistent
+> lookup — `User@EXAMPLE.COM` and `user@example.com` are the same address.
+
+---
+
+### Verifying a domain can receive email
+
+`VerifyDomain` performs an optional DNS MX lookup to confirm the domain is
+configured to receive email. Call it after `ValidateAndNormalize` when you
+want to reject obviously fake domains before sending a verification email.
+
+Results are cached per domain (default 5 minutes) and DNS lookups for the same
+domain are deduplicated via `singleflight` — safe for high-concurrency workloads.
+
+```go
+ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+defer cancel()
+
+err = emailMod.VerifyDomain(ctx, normalized)
+switch {
+case errors.Is(err, email.ErrDomainNoMX):
+    // 400 — domain exists but cannot receive email
+    c.JSON(400, map[string]string{"error": "email domain cannot receive messages"})
+    return
+case errors.Is(err, email.ErrDomainUnresolvable):
+    // DNS lookup failed — do NOT block the user; log and continue
+    log.Warn("DNS check unavailable: %v", err)
+}
+```
+
+> **`ErrDomainUnresolvable` is a soft failure.** DNS can be temporarily
+> unavailable due to network issues unrelated to the user's input. Never
+> block a registration on this error — log it and proceed.
+
+---
+
 ## Key Management
 
 On first run authcore creates `KeysDir` (default `.authcore`) and generates:
@@ -426,7 +511,8 @@ authcore/
 │
 ├── auth/
 │   ├── jwt/             # JSON Web Token authentication (EdDSA / Ed25519)
-│   └── password/        # Argon2id password hashing
+│   ├── password/        # Argon2id password hashing
+│   └── email/           # Email validation, normalization, DNS MX verification
 │
 └── examples/
     ├── basic/           # authcore initialisation strategies
@@ -438,9 +524,12 @@ authcore/
 
 | Import path | Visibility | Purpose |
 |---|---|---|
+| Import path | Visibility | Purpose |
+|---|---|---|
 | `github.com/Jaro-c/authcore` | public | Core types and entry point |
 | `…/auth/jwt` | public | JWT module |
 | `…/auth/password` | public | Argon2id password hashing module |
+| `…/auth/email` | public | Email validation, normalization, MX verification |
 | `…/internal/clock` | internal | Shared time abstraction |
 | `…/internal/keymanager` | internal | Key generation and persistence |
 
@@ -517,6 +606,14 @@ In tests, inject a stub `Provider` that returns fixed keys — no disk I/O requi
 | `password.ErrInvalidHash` | stored hash is malformed or not Argon2id PHC format |
 | `password.ErrWeakPassword` | plaintext does not meet the built-in policy |
 
+### auth/email package
+
+| Error | Client-safe? | When |
+|---|---|---|
+| `email.ErrInvalidEmail` | ✓ Yes | Address fails RFC 5321/5322 validation; `errors.Unwrap` gives the specific rule |
+| `email.ErrDomainNoMX` | ✓ Yes | Domain exists but has no MX records (cannot receive email) |
+| `email.ErrDomainUnresolvable` | ✗ No | DNS lookup failed; treat as soft failure, do not block the user |
+
 Always use `errors.Is` for error inspection — errors may be wrapped:
 
 ```go
@@ -590,6 +687,7 @@ pwd, _ := password.New(auth, password.Config{
 - [x] Core library — key management, logger, clock, Provider interface
 - [x] `auth/jwt` — EdDSA token issuance, verification, rotation, timing-safe hash
 - [x] `auth/password` — Argon2id password hashing with PHC format
+- [x] `auth/email` — RFC 5321/5322 validation, normalization, DNS MX verification with cache
 - [ ] `auth/apikey` — opaque key generation with pluggable store interface *(future)*
 - [ ] `auth/oauth` — OAuth 2.0 / OIDC provider integration *(future)*
 - [ ] Key rotation helpers — zero-downtime rotation via `kid` header *(future)*

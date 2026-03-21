@@ -90,7 +90,13 @@ func validateKeysDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("keys directory %q is not writable: %w", dir, err)
 	}
-	tmp.Close()
-	os.Remove(tmp.Name())
+	name := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return fmt.Errorf("keys directory %q write check failed: %w", dir, err)
+	}
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("keys directory %q write check cleanup failed: %w", dir, err)
+	}
 	return nil
 }

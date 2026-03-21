@@ -92,7 +92,14 @@ type Email struct {
 
 // New creates an Email module using the provider's logger and starts a
 // background goroutine that evicts expired cache entries.
-// Call [Email.Close] to stop it when the module is no longer needed.
+//
+// Always call [Email.Close] when the module is no longer needed — typically
+// via defer at the call site — to stop the background goroutine and prevent
+// a goroutine leak:
+//
+//	emailMod, err := email.New(auth)
+//	if err != nil { ... }
+//	defer emailMod.Close()
 func New(p authcore.Provider) (*Email, error) {
 	e := &Email{
 		log:      p.Logger(),
