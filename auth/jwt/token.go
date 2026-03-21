@@ -99,12 +99,12 @@ func verifyAccessToken[T any](tokenStr string, pub ed25519.PublicKey, now time.T
 	var c accessClaims[T]
 	_, err := gjwt.ParseWithClaims(
 		tokenStr, &c,
-		eddsaKeyFunc(pub),
-		gjwt.WithTimeFunc(func() time.Time { return now }),
-		gjwt.WithExpirationRequired(),
-		gjwt.WithIssuedAt(),
-		gjwt.WithAudience(audience[0]),
-		gjwt.WithLeeway(leeway),
+		eddsaKeyFunc(pub),                                   // enforce EdDSA alg; rejects HS256/RS256 confusion attacks
+		gjwt.WithTimeFunc(func() time.Time { return now }),  // inject clock so tests can freeze time
+		gjwt.WithExpirationRequired(),                       // reject tokens without an exp claim
+		gjwt.WithIssuedAt(),                                 // reject tokens with iat in the future
+		gjwt.WithAudience(audience[0]),                      // token must contain this audience value
+		gjwt.WithLeeway(leeway),                             // tolerate small clock drift between servers
 	)
 	if err != nil {
 		return nil, mapJWTError(err)
@@ -119,12 +119,12 @@ func verifyRefreshToken(tokenStr string, pub ed25519.PublicKey, now time.Time, a
 	var c refreshClaims
 	_, err := gjwt.ParseWithClaims(
 		tokenStr, &c,
-		eddsaKeyFunc(pub),
-		gjwt.WithTimeFunc(func() time.Time { return now }),
-		gjwt.WithExpirationRequired(),
-		gjwt.WithIssuedAt(),
-		gjwt.WithAudience(audience[0]),
-		gjwt.WithLeeway(leeway),
+		eddsaKeyFunc(pub),                                   // enforce EdDSA alg; rejects HS256/RS256 confusion attacks
+		gjwt.WithTimeFunc(func() time.Time { return now }),  // inject clock so tests can freeze time
+		gjwt.WithExpirationRequired(),                       // reject tokens without an exp claim
+		gjwt.WithIssuedAt(),                                 // reject tokens with iat in the future
+		gjwt.WithAudience(audience[0]),                      // token must contain this audience value
+		gjwt.WithLeeway(leeway),                             // tolerate small clock drift between servers
 	)
 	if err != nil {
 		return nil, mapJWTError(err)
@@ -135,6 +135,10 @@ func verifyRefreshToken(tokenStr string, pub ed25519.PublicKey, now time.Time, a
 // eddsaKeyFunc returns a gjwt.Keyfunc that enforces EdDSA and returns pub.
 func eddsaKeyFunc(pub ed25519.PublicKey) gjwt.Keyfunc {
 	return func(t *gjwt.Token) (any, error) {
+		// Explicitly reject any algorithm that is not EdDSA.
+		// Without this check an attacker could craft a token with alg=HS256
+		// and sign it using the public key as the HMAC secret — a well-known
+		// algorithm confusion attack that allows signature forgery.
 		if _, ok := t.Method.(*gjwt.SigningMethodEd25519); !ok {
 			return nil, fmt.Errorf("%w: unexpected alg %q", ErrTokenInvalid, t.Header["alg"])
 		}
@@ -143,21 +147,30 @@ func eddsaKeyFunc(pub ed25519.PublicKey) gjwt.Keyfunc {
 }
 
 // mapJWTError converts golang-jwt sentinel errors to our public sentinels.
+// This decouples callers from the underlying library's error types, so we can
+// swap or upgrade the JWT library without breaking the public API.
 func mapJWTError(err error) error {
 	switch {
 	case errors.Is(err, gjwt.ErrTokenExpired):
+		// Expired tokens are CLIENT-SAFE to communicate; prompt the client to refresh.
 		return ErrTokenExpired
 	case errors.Is(err, gjwt.ErrTokenSignatureInvalid):
+		// Bad signature — could be a wrong key, a tampered token, or an unsupported algorithm.
 		return ErrTokenInvalid
 	case errors.Is(err, gjwt.ErrTokenMalformed):
+		// Not a valid three-part JWT at all — likely user error or a non-token string.
 		return ErrTokenMalformed
 	default:
+		// Wrap any other library error under ErrTokenInvalid so callers
+		// can handle it generically without catching internal library types.
 		return fmt.Errorf("%w: %w", ErrTokenInvalid, err)
 	}
 }
 
 // accessClaimsToClaims converts internal accessClaims to the public Claims type.
 func accessClaimsToClaims[T any](c *accessClaims[T]) *Claims[T] {
+	// gjwt.NumericDate pointers can be nil if the claim is absent in the token.
+	// Extract them defensively to avoid nil pointer dereferences.
 	var iat, exp time.Time
 	if c.IssuedAt != nil {
 		iat = c.IssuedAt.Time
@@ -170,7 +183,7 @@ func accessClaimsToClaims[T any](c *accessClaims[T]) *Claims[T] {
 		Issuer:    c.Issuer,
 		Audience:  []string(c.Audience),
 		TokenID:   c.ID,
-		IssuedAt:  iat.UTC(),
+		IssuedAt:  iat.UTC(),  // normalise to UTC regardless of the server's local timezone
 		ExpiresAt: exp.UTC(),
 		Extra:     c.Extra,
 	}

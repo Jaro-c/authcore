@@ -94,11 +94,14 @@ type Password struct {
 //	    Parallelism: 4,
 //	})
 func New(p authcore.Provider, cfg ...Config) (*Password, error) {
+	// Accept an optional Config via variadic to allow zero-config usage:
+	//   password.New(auth)             — OWASP defaults, no boilerplate
+	//   password.New(auth, customCfg)  — custom work factors
 	var resolved Config
 	if len(cfg) > 0 {
 		resolved = cfg[0]
 	}
-	resolved = applyDefaults(resolved)
+	resolved = applyDefaults(resolved) // fill any zero-value fields with safe defaults
 
 	if err := validateConfig(resolved); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
@@ -195,21 +198,28 @@ func checkPolicy(plaintext string) error {
 //	if errors.Is(err, password.ErrWeakPassword) { /* tell the user what's wrong */ }
 //	db.StorePasswordHash(userID, hash)
 func (p *Password) Hash(plaintext string) (string, error) {
+	// Validate before hashing — fail fast before spending ~64 MiB of RAM on Argon2id.
 	if !p.cfg.DisablePolicy {
 		if err := checkPolicy(plaintext); err != nil {
 			return "", &policyViolation{reason: err}
 		}
 	}
 
+	// Fresh random salt per call ensures two hashes of the same password are
+	// always different strings — prevents rainbow-table precomputation attacks.
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("password: generate salt: %w", err)
 	}
 
+	// Argon2id: memory-hard, GPU/ASIC-resistant. This deliberately allocates
+	// ~Memory KiB of RAM to make brute-force attacks expensive.
 	key := argon2.IDKey([]byte(plaintext), salt, p.cfg.Iterations, p.cfg.Memory, p.cfg.Parallelism, keyLen)
 
-	// PHC string format: $argon2id$v=19$m=<mem>,t=<iter>,p=<par>$<salt>$<key>
-	// Salt and key are base64 encoded without padding (RFC 4648 §5).
+	// Encode as PHC string: self-describing and portable across libraries.
+	// Embedding the parameters in the hash string means Verify can always
+	// reconstruct the exact same hash without consulting the module config.
+	// Salt and key are base64-encoded without padding (RFC 4648 §5).
 	encoded := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version,
 		p.cfg.Memory,
@@ -234,13 +244,19 @@ func (p *Password) Hash(plaintext string) (string, error) {
 //	if errors.Is(err, password.ErrInvalidHash) { ... } // hash is malformed
 //	if !ok { return http.StatusUnauthorized }
 func (p *Password) Verify(plaintext, phcHash string) (bool, error) {
+	// Extract the Argon2id parameters and salt embedded in the stored hash.
+	// Using the stored parameters — not the current module config — means old
+	// hashes remain valid even after the work factors are tuned upward.
 	params, salt, storedKey, err := parsePHC(phcHash)
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrInvalidHash, err)
 	}
 
+	// Recompute the derived key with the same parameters and salt as the original.
 	key := argon2.IDKey([]byte(plaintext), salt, params.Iterations, params.Memory, params.Parallelism, uint32(len(storedKey)))
 
+	// Compare in constant time to prevent timing attacks that could reveal
+	// how many bytes of the candidate key matched the stored key.
 	return subtle.ConstantTimeCompare(key, storedKey) == 1, nil
 }
 
