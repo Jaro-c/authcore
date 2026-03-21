@@ -130,8 +130,7 @@ func (p *Password) Name() string { return "password" }
 //	    c.JSON(400, gin.H{"error": reason})
 //	}
 //
-// This check is identical to the one Hash performs internally unless DisablePolicy
-// is set to true in the module config.
+// This check is identical to the one Hash performs internally.
 func (p *Password) ValidatePolicy(plaintext string) error {
 	if err := checkPolicy(plaintext); err != nil {
 		return &policyViolation{reason: err}
@@ -188,7 +187,7 @@ func checkPolicy(plaintext string) error {
 // cryptographically random salt is generated per call, so two calls with the
 // same input produce different (but equivalent) hashes.
 //
-// Policy (enforced by default, disable via Config.DisablePolicy):
+// Policy (always enforced):
 //   - 12–64 characters
 //   - At least one uppercase letter, one lowercase letter, one digit, one special character
 //
@@ -199,10 +198,8 @@ func checkPolicy(plaintext string) error {
 //	db.StorePasswordHash(userID, hash)
 func (p *Password) Hash(plaintext string) (string, error) {
 	// Validate before hashing — fail fast before spending ~64 MiB of RAM on Argon2id.
-	if !p.cfg.DisablePolicy {
-		if err := checkPolicy(plaintext); err != nil {
-			return "", &policyViolation{reason: err}
-		}
+	if err := checkPolicy(plaintext); err != nil {
+		return "", &policyViolation{reason: err}
 	}
 
 	// Fresh random salt per call ensures two hashes of the same password are

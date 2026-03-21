@@ -259,17 +259,6 @@ func TestHash_strongPasswordSucceeds(t *testing.T) {
 	}
 }
 
-func TestHash_policyDisabledAllowsWeakPassword(t *testing.T) {
-	mod, err := New(fakeProvider{}, Config{DisablePolicy: true})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	// "weak" would normally fail the policy check.
-	_, err = mod.Hash("weak")
-	if err != nil {
-		t.Errorf("Hash(weak) with DisablePolicy=true error = %v, want nil", err)
-	}
-}
 
 // ---- checkPolicy() ----------------------------------------------------------
 

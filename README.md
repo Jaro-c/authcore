@@ -737,8 +737,8 @@ verifier will select the right key automatically. See the
 
 Yes, as long as the hashes are in PHC string format (`$argon2id$v=19$...`).
 `Verify` reads all parameters from the stored hash, so it works regardless of which
-library produced it. For hashes in a legacy format, set `DisablePolicy: true` and
-re-hash on the user's next successful login.
+library produced it. For hashes in a legacy format, validate the password at your
+application layer before calling `Hash`, then re-hash on the user's next successful login.
 
 ---
 
@@ -752,7 +752,6 @@ pwd, _ := password.New(auth, password.Config{
     Memory:      8 * 1024, // minimum allowed (8 MiB)
     Iterations:  1,
     Parallelism: 1,
-    DisablePolicy: true,
 })
 ```
 
