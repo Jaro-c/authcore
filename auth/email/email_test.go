@@ -1,8 +1,11 @@
 package email
 
 import (
+	"context"
 	"errors"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/Jaro-c/authcore"
 )
@@ -191,5 +194,116 @@ func TestValidateAndNormalize_emptyReturnsError(t *testing.T) {
 	_, err := newMod(t).ValidateAndNormalize("")
 	if !errors.Is(err, ErrInvalidEmail) {
 		t.Errorf("expected ErrInvalidEmail, got %v", err)
+	}
+}
+
+// ---- VerifyDomain() tests ---------------------------------------------------
+
+// primeCache directly writes a cache entry, bypassing DNS, so we can test
+// cache hit behaviour without network access.
+func primeCache(m *Email, domain string, hasMX bool, ttl time.Duration) {
+	m.mu.Lock()
+	m.cache[domain] = cacheEntry{hasMX: hasMX, expiresAt: time.Now().Add(ttl)}
+	m.mu.Unlock()
+}
+
+func TestVerifyDomain_cachedPositiveReturnsNil(t *testing.T) {
+	m := newMod(t)
+	primeCache(m, "example.com", true, time.Minute)
+
+	if err := m.VerifyDomain(context.Background(), "user@example.com"); err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+}
+
+func TestVerifyDomain_cachedNegativeReturnsErrDomainNoMX(t *testing.T) {
+	m := newMod(t)
+	primeCache(m, "nodomain.example", false, time.Minute)
+
+	err := m.VerifyDomain(context.Background(), "user@nodomain.example")
+	if !errors.Is(err, ErrDomainNoMX) {
+		t.Errorf("expected ErrDomainNoMX, got %v", err)
+	}
+}
+
+func TestVerifyDomain_expiredCacheHitsDNS(t *testing.T) {
+	m := newMod(t)
+	// Write an expired positive entry — it must NOT be used.
+	m.mu.Lock()
+	m.cache["example.com"] = cacheEntry{hasMX: true, expiresAt: time.Now().Add(-time.Second)}
+	m.mu.Unlock()
+
+	// DNS will fail (no real network in unit tests using a broken resolver).
+	m.resolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("no network")
+		},
+	}
+	err := m.VerifyDomain(context.Background(), "user@example.com")
+	if !errors.Is(err, ErrDomainUnresolvable) {
+		t.Errorf("expected ErrDomainUnresolvable after cache miss + DNS failure, got %v", err)
+	}
+}
+
+func TestVerifyDomain_dnsFailureReturnsErrDomainUnresolvable(t *testing.T) {
+	m := newMod(t)
+	m.resolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("no network")
+		},
+	}
+	err := m.VerifyDomain(context.Background(), "user@unreachable.example")
+	if !errors.Is(err, ErrDomainUnresolvable) {
+		t.Errorf("expected ErrDomainUnresolvable, got %v", err)
+	}
+}
+
+func TestVerifyDomain_dnsFailureIsWrapped(t *testing.T) {
+	m := newMod(t)
+	m.resolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("no network")
+		},
+	}
+	err := m.VerifyDomain(context.Background(), "user@unreachable.example")
+	if errors.Unwrap(err) == nil {
+		t.Error("ErrDomainUnresolvable must wrap the underlying DNS error")
+	}
+}
+
+func TestVerifyDomain_noAtSignReturnsErrDomainNoMX(t *testing.T) {
+	m := newMod(t)
+	err := m.VerifyDomain(context.Background(), "notanemail")
+	if !errors.Is(err, ErrDomainNoMX) {
+		t.Errorf("expected ErrDomainNoMX for address with no '@', got %v", err)
+	}
+}
+
+func TestVerifyDomain_dnsFailureCachesNegativeBriefly(t *testing.T) {
+	m := newMod(t)
+	m.resolver = &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("no network")
+		},
+	}
+	_ = m.VerifyDomain(context.Background(), "user@unreachable.example")
+
+	// Second call must hit the cache (no second DNS attempt).
+	// We verify by reading the cache directly.
+	m.mu.RLock()
+	entry, ok := m.cache["unreachable.example"]
+	m.mu.RUnlock()
+	if !ok {
+		t.Fatal("expected a cache entry after DNS failure")
+	}
+	if entry.hasMX {
+		t.Error("failed DNS lookup must cache hasMX=false")
+	}
+	if time.Until(entry.expiresAt) > 31*time.Second {
+		t.Errorf("negative DNS failure TTL should be ≤30 s, got %v", time.Until(entry.expiresAt))
 	}
 }
