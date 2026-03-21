@@ -567,6 +567,8 @@ authcore/
     ├── basic/           # authcore initialisation strategies
     ├── jwt/             # JWT: create, verify, rotate
     ├── password/        # Password: policy, hash, verify
+    ├── email/           # Email: validate, normalize, DNS MX verification
+    ├── username/        # Username: validate, normalize, reserved names
     ├── fiber/           # Full auth API with Fiber v3 (separate module)
     └── gin/             # Full auth API with Gin (separate module)
 ```
