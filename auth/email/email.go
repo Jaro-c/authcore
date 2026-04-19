@@ -7,8 +7,14 @@
 //   - Domain contains at least one dot; no leading, trailing, or consecutive dots
 //   - Each domain label is 1–63 characters
 //
+// Internationalised domain names (IDN) are supported: a Unicode domain such
+// as "münchen.de" is converted to its ASCII punycode form ("xn--mnchen-3ya.de")
+// during normalisation, matching what DNS actually resolves. Store the
+// canonical ASCII form in your database so lookups are deterministic.
+//
 // The single entry point is [Email.ValidateAndNormalize] — it normalizes
-// (lowercase + trim) and validates in one step, returning the canonical form.
+// (lowercase + trim + punycode) and validates in one step, returning the
+// canonical form.
 // Always store and query emails using this canonical form:
 //
 //	emailMod, _ := email.New(auth)
@@ -54,10 +60,17 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/idna"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/Jaro-c/authcore"
 )
+
+// idnaProfile is configured once and reused because the profile value is
+// immutable and its internal tables are allocated only once.
+// Lookup is the strictest profile that still tolerates TR46 transitional
+// processing, matching what a browser's URL bar does when resolving a host.
+var idnaProfile = idna.Lookup
 
 // DefaultCacheTTL is the maximum duration a domain MX lookup result is cached.
 // Tune this value if your workload has strict freshness requirements.
@@ -182,10 +195,28 @@ func (e *Email) ValidateAndNormalize(address string) (string, error) {
 	return normalized, nil
 }
 
-// normalize lowercases and trims surrounding whitespace. Internal only —
-// callers outside this package must use ValidateAndNormalize.
+// normalize lowercases the address, trims surrounding whitespace, and
+// converts a Unicode (IDN) domain to its ASCII (punycode) form. Internal
+// only — callers outside this package must use ValidateAndNormalize.
+//
+// If the domain cannot be converted (for example it contains a disallowed
+// codepoint), the original lowercased + trimmed string is returned. The
+// downstream validator will then reject it with a clear "invalid format"
+// error.
 func normalize(address string) string {
-	return strings.ToLower(strings.TrimSpace(address))
+	lower := strings.ToLower(strings.TrimSpace(address))
+	atIdx := strings.LastIndexByte(lower, '@')
+	if atIdx < 0 {
+		// Addresses without an "@" fail validation regardless of IDN, so
+		// leaving the input untouched here produces a clearer error path.
+		return lower
+	}
+	local, domain := lower[:atIdx], lower[atIdx+1:]
+	ascii, err := idnaProfile.ToASCII(domain)
+	if err != nil {
+		return lower
+	}
+	return local + "@" + ascii
 }
 
 // validate checks address against RFC 5321 / RFC 5322 rules.

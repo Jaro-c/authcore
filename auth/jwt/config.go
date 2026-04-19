@@ -9,12 +9,13 @@ import (
 // All fields have safe defaults; use DefaultConfig() as the starting point.
 type Config struct {
 	// AccessTokenTTL is the lifetime of access tokens.
-	// Defaults to 15 minutes.
+	// Defaults to 15 minutes. Capped at 24 hours — longer values risk
+	// turning a bearer token into an effectively permanent credential.
 	AccessTokenTTL time.Duration
 
 	// RefreshTokenTTL is the lifetime of refresh tokens.
 	// Must be strictly greater than AccessTokenTTL.
-	// Defaults to 24 hours.
+	// Defaults to 24 hours. Capped at 365 days.
 	RefreshTokenTTL time.Duration
 
 	// Issuer is the value of the "iss" claim in every token issued by this
@@ -74,16 +75,32 @@ func applyDefaults(cfg Config) Config {
 	return cfg
 }
 
+// maxAccessTokenTTL and maxRefreshTokenTTL cap the configurable token
+// lifetimes. They protect operators from accidentally issuing effectively
+// permanent bearer tokens (for example by typing 10*time.Hour instead of
+// 10*time.Minute). The ceilings match the longest values OWASP's JWT cheat
+// sheet recommends for a typical web application.
+const (
+	maxAccessTokenTTL  = 24 * time.Hour
+	maxRefreshTokenTTL = 365 * 24 * time.Hour
+)
+
 // validateConfig returns an error if cfg contains invalid or inconsistent values.
 func validateConfig(cfg Config) error {
 	if cfg.AccessTokenTTL <= 0 {
 		return fmt.Errorf("access token TTL must be positive, got %s", cfg.AccessTokenTTL)
+	}
+	if cfg.AccessTokenTTL > maxAccessTokenTTL {
+		return fmt.Errorf("access token TTL must be at most %s, got %s", maxAccessTokenTTL, cfg.AccessTokenTTL)
 	}
 	if cfg.RefreshTokenTTL <= cfg.AccessTokenTTL {
 		return fmt.Errorf(
 			"refresh token TTL (%s) must be greater than access token TTL (%s)",
 			cfg.RefreshTokenTTL, cfg.AccessTokenTTL,
 		)
+	}
+	if cfg.RefreshTokenTTL > maxRefreshTokenTTL {
+		return fmt.Errorf("refresh token TTL must be at most %s, got %s", maxRefreshTokenTTL, cfg.RefreshTokenTTL)
 	}
 	if len(cfg.Audience) == 0 {
 		return fmt.Errorf("audience must contain at least one value")
