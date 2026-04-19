@@ -7,6 +7,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.2.0] - 2026-04-19
+
+Defence-in-depth release. Five complementary validations close the last
+round of edge cases flagged in the pre-v1 gap audit. No public API changes;
+existing callers upgrade without modification, although the tightened
+validation can reject configurations or inputs that were previously
+silently accepted.
+
+### Added
+
+#### JWT module (`github.com/Jaro-c/authcore/auth/jwt`)
+- `validateConfig` now caps `AccessTokenTTL` at **24 hours** and
+  `RefreshTokenTTL` at **365 days**. Prevents operators from accidentally
+  issuing effectively permanent bearer tokens by typing the wrong unit.
+- `VerifyAccessToken` / `RotateTokens` now assert that the token's JOSE
+  `kid` header matches the module's current key id. Unknown kids return
+  `ErrTokenInvalid`. Future-proofs multi-key rotation.
+
+#### Password module (`github.com/Jaro-c/authcore/auth/password`)
+- `Hash`, `Verify`, and `ValidatePolicy` now normalise plaintext to
+  Unicode **NFC** before hashing or policy checks. A user who registers
+  on macOS (precomposed accents) can now sign in on Linux (decomposed
+  form) without being locked out.
+
+#### Email module (`github.com/Jaro-c/authcore/auth/email`)
+- `ValidateAndNormalize` now converts Unicode domain parts to their
+  ASCII (**punycode**) form via `golang.org/x/net/idna` before
+  validation. Users with legitimate internationalised domains
+  (`münchen.de`, `例え.jp`) can now register. The stored canonical
+  form is always ASCII, so the downstream DNS MX lookup resolves it.
+
+#### Key manager (`internal/keymanager`)
+- All key-loading paths now share a `readCapped` helper that rejects
+  any key file larger than 4 KiB (healthy Ed25519 PEM is ~200 bytes).
+  Protects startup from a corrupted or attacker-replaced key file
+  that would otherwise be loaded whole into memory before
+  `pem.Decode` rejects it.
+
+### Dependencies
+
+- Added `golang.org/x/net v0.51.0` for IDN (punycode) support.
+  Post-GO-2026-4559, not affected by the advisory.
+- Added `golang.org/x/text v0.35.0` for Unicode NFC normalisation.
+
+---
+
 ## [1.1.2] - 2026-04-19
 
 Security-hardening release. No public API changes; existing callers upgrade

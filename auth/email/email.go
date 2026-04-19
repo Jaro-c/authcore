@@ -7,8 +7,14 @@
 //   - Domain contains at least one dot; no leading, trailing, or consecutive dots
 //   - Each domain label is 1–63 characters
 //
+// Internationalised domain names (IDN) are supported: a Unicode domain such
+// as "münchen.de" is converted to its ASCII punycode form ("xn--mnchen-3ya.de")
+// during normalisation, matching what DNS actually resolves. Store the
+// canonical ASCII form in your database so lookups are deterministic.
+//
 // The single entry point is [Email.ValidateAndNormalize] — it normalizes
-// (lowercase + trim) and validates in one step, returning the canonical form.
+// (lowercase + trim + punycode) and validates in one step, returning the
+// canonical form.
 // Always store and query emails using this canonical form:
 //
 //	emailMod, _ := email.New(auth)
