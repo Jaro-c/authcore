@@ -9,12 +9,13 @@ import (
 // All fields have safe defaults; use DefaultConfig() as the starting point.
 type Config struct {
 	// AccessTokenTTL is the lifetime of access tokens.
-	// Defaults to 15 minutes.
+	// Defaults to 15 minutes. Capped at 24 hours — longer values risk
+	// turning a bearer token into an effectively permanent credential.
 	AccessTokenTTL time.Duration
 
 	// RefreshTokenTTL is the lifetime of refresh tokens.
 	// Must be strictly greater than AccessTokenTTL.
-	// Defaults to 24 hours.
+	// Defaults to 24 hours. Capped at 365 days.
 	RefreshTokenTTL time.Duration
 
 	// Issuer is the value of the "iss" claim in every token issued by this

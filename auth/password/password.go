@@ -188,6 +188,11 @@ func checkPolicy(plaintext string) error {
 // cryptographically random salt is generated per call, so two calls with the
 // same input produce different (but equivalent) hashes.
 //
+// plaintext is normalised to Unicode NFC before policy checks and hashing,
+// so the same visual password typed on different platforms (precomposed vs
+// decomposed accents) produces the same hash. Users who register on one
+// operating system and sign in on another are not locked out.
+//
 // Policy (always enforced):
 //   - 12–64 characters
 //   - At least one uppercase letter, one lowercase letter, one digit, one special character
