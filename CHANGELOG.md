@@ -7,6 +7,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.2.2] - 2026-04-26
+
+Dependency-update release. No public API changes; safe drop-in upgrade.
+
+### Changed
+
+- **`golang.org/x/net`** bumped from v0.51.0 to v0.53.0 (includes HTTP/2 and
+  networking security fixes).
+- **`golang.org/x/text`** bumped from v0.35.0 to v0.36.0 (Unicode handling
+  fixes).
+- **GitHub Actions** — `actions/checkout`, `codecov/codecov-action`,
+  `actions/upload-artifact`, `actions/stale`, and `securego/gosec` pinned to
+  latest releases via Dependabot.
+
+---
+
 ## [1.2.1] - 2026-04-19
 
 Documentation-only release. No code behaviour changes; safe drop-in upgrade.
